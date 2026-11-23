@@ -136,6 +136,7 @@ def test_job_lifecycle_and_files(srv, video: Path):
     st = wait_done(srv, job_id)
     assert st["state"] == "done", st
     assert (st["stage"], st["fraction"]) == ("done", 1.0)
+    assert st["stages"] == ["audio", "render", "done"]
     assert st["log"] == ["reading audio"]
     assert [c["file"] for c in st["manifest"]["clips"]] == ["my clip_clip01.mp4", "my clip_clip02.mp4"]
 
@@ -250,3 +251,15 @@ def test_unknown_routes_and_jobs(srv):
     assert request(srv, "GET", "/api/nope")[0] == 404
     assert request(srv, "GET", "/api/jobs/doesnotexist")[0] == 404
     assert request(srv, "GET", "/api/jobs/doesnotexist/files/a.mp4")[0] == 404
+
+
+def test_review_page(srv):
+    status, headers, body = request(srv, "GET", "/")
+    assert status == 200
+    assert headers["content-type"] == "text/html; charset=utf-8"
+    assert "frame-ancestors 'none'" in headers["content-security-policy"]
+    assert b'id="new-job"' in body
+    # the page talks to the same API the tests above use
+    assert b"/api/jobs" in body
+    assert request(srv, "GET", "/index.html")[0] == 200
+    assert request(srv, "GET", "/", headers={"Host": "evil.example"})[0] == 403

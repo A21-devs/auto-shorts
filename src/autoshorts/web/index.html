@@ -1,0 +1,291 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>autoshorts</title>
+<style>
+  :root {
+    --bg: #f6f6f4; --panel: #fff; --text: #1c1c1a; --muted: #6b6b66; --line: #e2e2dd;
+    --accent: #2f6fde; --keep: #1f8a4c; --drop: #b8412f; --bar: #e8e8e3;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root {
+      --bg: #151514; --panel: #1f1f1d; --text: #ececea; --muted: #9a9a94; --line: #2f2f2c;
+      --accent: #6c9cf0; --keep: #4cc07f; --drop: #e5735f; --bar: #2c2c29;
+    }
+  }
+  * { box-sizing: border-box; }
+  body { margin: 0; background: var(--bg); color: var(--text);
+         font: 15px/1.45 system-ui, -apple-system, "Segoe UI", sans-serif; }
+  main { max-width: 1100px; margin: 0 auto; padding: 24px 16px 64px; }
+  h1 { font-size: 20px; margin: 0 0 16px; }
+  form, .status { background: var(--panel); border: 1px solid var(--line); border-radius: 10px; padding: 16px; }
+  form { display: grid; grid-template-columns: repeat(auto-fit, minmax(130px, 1fr)); gap: 12px; align-items: end; }
+  label { display: flex; flex-direction: column; gap: 4px; font-size: 13px; color: var(--muted); }
+  label.wide { grid-column: 1 / -1; }
+  label.check { flex-direction: row; align-items: center; gap: 8px; color: var(--text); }
+  input, select, button { font: inherit; color: inherit; }
+  input[type=text], input[type=number], select {
+    background: var(--bg); border: 1px solid var(--line); border-radius: 6px; padding: 7px 9px; width: 100%; }
+  button { border: 1px solid var(--line); background: var(--panel); border-radius: 6px; padding: 7px 12px;
+           cursor: pointer; }
+  button.primary { background: var(--accent); border-color: var(--accent); color: #fff; }
+  button:disabled { opacity: .5; cursor: default; }
+  .status { margin-top: 16px; }
+  .status[hidden] { display: none; }
+  .bar { height: 8px; background: var(--bar); border-radius: 4px; overflow: hidden; margin: 8px 0; }
+  .bar > div { height: 100%; width: 0; background: var(--accent); transition: width .3s; }
+  .error { color: var(--drop); white-space: pre-wrap; }
+  pre.log { margin: 8px 0 0; max-height: 140px; overflow: auto; font-size: 12px; color: var(--muted);
+            white-space: pre-wrap; }
+  .summary { display: flex; justify-content: space-between; gap: 12px; flex-wrap: wrap; margin: 24px 0 12px; }
+  .clips { display: grid; grid-template-columns: repeat(auto-fill, minmax(240px, 1fr)); gap: 16px; }
+  .clip { background: var(--panel); border: 1px solid var(--line); border-radius: 10px; overflow: hidden;
+          display: flex; flex-direction: column; }
+  .clip video { width: 100%; aspect-ratio: 9 / 16; background: #000; display: block; }
+  .clip .meta { padding: 10px 12px; display: flex; flex-direction: column; gap: 6px; flex: 1; }
+  .clip .times { font-variant-numeric: tabular-nums; }
+  .clip .why { color: var(--muted); font-size: 13px; }
+  .clip .actions { display: flex; gap: 8px; margin-top: auto; }
+  .clip .actions button { flex: 1; }
+  .clip.keep { border-color: var(--keep); }
+  .clip.keep .keep-btn { background: var(--keep); border-color: var(--keep); color: #fff; }
+  .clip.drop { opacity: .45; }
+  .clip.drop .drop-btn { background: var(--drop); border-color: var(--drop); color: #fff; }
+  .muted { color: var(--muted); }
+  /* Windows paths have no spaces to break on, without this they push the page wider than a phone */
+  #status-line, #out-dir, #form-error { overflow-wrap: anywhere; }
+  #form-error { grid-column: 1 / -1; }
+  #form-error:empty, #notice:empty { display: none; }
+  #notice { margin-top: 16px; padding: 10px 12px; border: 1px solid var(--line); border-radius: 8px; }
+  #notice a { color: var(--accent); }
+</style>
+</head>
+<body>
+<main>
+  <h1>autoshorts</h1>
+  <form id="new-job">
+    <label class="wide">Video file
+      <input type="text" name="video" required placeholder="C:\Videos\my stream.mp4" autocomplete="off">
+    </label>
+    <label>Clips <input type="number" name="count" value="6" min="1" max="50"></label>
+    <label>Min seconds <input type="number" name="min" value="20" min="1" max="600" step="any"></label>
+    <label>Max seconds <input type="number" name="max" value="55" min="1" max="600" step="any"></label>
+    <label>Layout
+      <select name="layout">
+        <option value="blur">blur</option><option value="crop">crop</option><option value="fit">fit</option>
+      </select>
+    </label>
+    <label>Whisper model
+      <select name="model">
+        <option>tiny</option><option>base</option><option selected>small</option><option>medium</option>
+        <option>large-v3</option>
+      </select>
+    </label>
+    <label class="check"><input type="checkbox" name="captions" checked> Captions</label>
+    <button class="primary" type="submit">Make shorts</button>
+    <!-- separate from #error so the next status poll doesn't wipe it -->
+    <div class="error" id="form-error" role="alert"></div>
+  </form>
+  <div id="notice"></div>
+
+  <section class="status" id="status" hidden>
+    <div id="status-line"></div>
+    <div class="bar"><div id="bar"></div></div>
+    <div class="error" id="error"></div>
+    <pre class="log" id="log"></pre>
+  </section>
+
+  <div class="summary" id="summary" hidden>
+    <strong id="summary-text"></strong>
+    <span class="muted" id="out-dir"></span>
+  </div>
+  <section class="clips" id="clips"></section>
+</main>
+
+<script>
+"use strict";
+// Rough share of the total time each stage takes on a typical run, for one overall bar.
+const WEIGHTS = { audio: 0.05, scenes: 0.1, transcribe: 0.45, render: 0.4 };
+const ORDER = ["audio", "scenes", "transcribe", "render"];
+const LABELS = { audio: "reading audio", scenes: "finding scene cuts", transcribe: "transcribing",
+                 render: "rendering clips", done: "done" };
+
+const $ = (id) => document.getElementById(id);
+let currentJob = null;
+let pollTimer = null;
+let shownManifest = null;
+
+// `seen` is the list of stages the job has gone through. Once it's past the point where
+// transcription would have run without running it (captions off, silent or missing audio, no
+// whisper), its share is spread over the rest so the bar doesn't jump.
+function overall(stage, fraction, seen) {
+  if (stage === "done") return 1;
+  const skipped = ORDER.indexOf(stage) > ORDER.indexOf("transcribe") && !seen.includes("transcribe");
+  const order = skipped ? ORDER.filter((s) => s !== "transcribe") : ORDER;
+  const sum = order.reduce((a, s) => a + WEIGHTS[s], 0);
+  let total = 0;
+  for (const s of order) {
+    if (s === stage) return (total + WEIGHTS[s] * fraction) / sum;
+    total += WEIGHTS[s];
+  }
+  return 0;
+}
+
+function fmt(t) {
+  const m = Math.floor(t / 60), s = t - m * 60;
+  return `${m}:${s.toFixed(1).padStart(4, "0")}`;
+}
+
+async function api(path, options) {
+  const res = await fetch(path, options);
+  const body = await res.json().catch(() => ({}));
+  if (!res.ok) throw new Error(body.error || `HTTP ${res.status}`);
+  return body;
+}
+
+function fileUrl(jobId, name) {
+  return `/api/jobs/${encodeURIComponent(jobId)}/files/${encodeURIComponent(name)}`;
+}
+
+function renderStatus(job) {
+  $("status").hidden = false;
+  const label = job.state === "queued" ? "waiting for the job before it"
+    : job.state === "error" ? "failed"
+    : LABELS[job.stage] || job.stage || "starting";
+  const pct = Math.round(overall(job.stage, job.fraction, job.stages) * 100);
+  $("status-line").textContent = `${job.video} - ${label}${job.state === "running" ? ` (${pct}%)` : ""}`;
+  $("bar").style.width = `${job.state === "done" ? 100 : pct}%`;
+  $("error").textContent = job.error || "";
+  $("log").textContent = job.log.join("\n");
+  $("log").scrollTop = $("log").scrollHeight;
+}
+
+function renderNotice(job) {
+  const box = $("notice");
+  box.replaceChildren();
+  if (!job.superseded_by) return;
+  // a newer run wrote to the same folder, so this job's manifest no longer matches the files
+  const link = document.createElement("a");
+  link.href = `#${job.superseded_by}`;
+  link.textContent = "open the newer run";
+  link.addEventListener("click", (ev) => { ev.preventDefault(); watch(job.superseded_by); });
+  box.append("A newer run replaced these clips, ", link, ".");
+}
+
+function renderClips(job) {
+  const m = job.superseded_by ? null : job.manifest;
+  // only rebuild when the manifest actually changed, or every poll would restart the videos
+  const key = JSON.stringify(m);
+  if (key === shownManifest) return;
+  shownManifest = key;
+  const box = $("clips");
+  box.replaceChildren();
+  $("summary").hidden = !m;
+  if (!m) return;
+  $("summary-text").textContent = `${m.clips.length} clip${m.clips.length === 1 ? "" : "s"}`;
+  $("out-dir").textContent = job.out_dir;
+  for (const clip of m.clips) {
+    const card = document.createElement("article");
+    card.className = "clip";
+    const video = document.createElement("video");
+    video.controls = true;
+    video.preload = "metadata";
+    video.src = fileUrl(job.id, clip.file);
+    const meta = document.createElement("div");
+    meta.className = "meta";
+    const times = document.createElement("div");
+    times.className = "times";
+    times.textContent = `${fmt(clip.start)} - ${fmt(clip.end)}  (${(clip.end - clip.start).toFixed(1)}s)`;
+    const score = document.createElement("div");
+    score.textContent = `score ${clip.score.toFixed(2)}`;
+    const why = document.createElement("div");
+    why.className = "why";
+    why.textContent = clip.reasons.length ? clip.reasons.join(", ") : "no standout signal";
+    const actions = document.createElement("div");
+    actions.className = "actions";
+    for (const [cls, text] of [["keep", "Keep"], ["drop", "Drop"]]) {
+      const b = document.createElement("button");
+      b.type = "button";
+      b.className = `${cls}-btn`;
+      b.textContent = text;
+      b.addEventListener("click", () => {
+        const on = !card.classList.contains(cls);
+        card.classList.remove("keep", "drop");
+        if (on) card.classList.add(cls);
+      });
+      actions.append(b);
+    }
+    meta.append(times, score, why, actions);
+    card.append(video, meta);
+    box.append(card);
+  }
+}
+
+async function poll() {
+  clearTimeout(pollTimer);
+  if (!currentJob) return;
+  try {
+    const job = await api(`/api/jobs/${encodeURIComponent(currentJob)}`);
+    renderStatus(job);
+    renderNotice(job);
+    renderClips(job);
+    if (job.state === "queued" || job.state === "running") pollTimer = setTimeout(poll, 1000);
+    else $("new-job").querySelector("button").disabled = false;
+  } catch (e) {
+    if (e.message === "no such job") {
+      // the server was restarted and forgot it, nothing to wait for
+      $("error").textContent = "that job is gone (the server was restarted), start a new one";
+      history.replaceState(null, "", location.pathname);
+      currentJob = null;
+      return;
+    }
+    $("error").textContent = `lost the server: ${e.message}`;
+    pollTimer = setTimeout(poll, 3000);
+  }
+}
+
+function watch(jobId) {
+  currentJob = jobId;
+  shownManifest = null;
+  history.replaceState(null, "", `#${jobId}`);
+  poll();
+}
+
+$("new-job").addEventListener("submit", async (ev) => {
+  ev.preventDefault();
+  const f = new FormData(ev.target);
+  const body = {
+    video: f.get("video"),
+    count: Number(f.get("count")),
+    min: Number(f.get("min")),
+    max: Number(f.get("max")),
+    layout: f.get("layout"),
+    model: f.get("model"),
+    captions: f.get("captions") === "on",
+  };
+  const button = ev.target.querySelector("button");
+  button.disabled = true;
+  $("form-error").textContent = "";
+  try {
+    const { id } = await api("/api/jobs", {
+      method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body),
+    });
+    watch(id);
+  } catch (e) {
+    $("form-error").textContent = e.message;
+    button.disabled = false;
+  }
+});
+
+// reopening the page (or refreshing mid-run) picks the job back up
+(async () => {
+  const fromHash = location.hash.slice(1);
+  if (fromHash) return watch(fromHash);
+  const jobs = await api("/api/jobs").catch(() => []);
+  if (jobs.length) watch(jobs[0].id);
+})();
+</script>
+</body>
+</html>

@@ -44,6 +44,14 @@ Layouts (`--layout`):
 - `crop`: fills the frame (center crop)
 - `fit`: black bars
 
+## Review in the browser
+
+```bash
+autoshorts serve
+```
+
+Open http://127.0.0.1:8765/, paste the path of a video and hit Make shorts. It shows progress while it works, then every clip with its score and why it was picked. The server only listens on your own machine.
+
 ## Install
 
 Needs Python 3.12+ and [ffmpeg](https://ffmpeg.org/) on your PATH.
