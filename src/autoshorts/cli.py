@@ -30,7 +30,29 @@ def build_parser() -> argparse.ArgumentParser:
     return p
 
 
+def serve_main(argv: list[str]) -> int:
+    p = argparse.ArgumentParser(prog="autoshorts serve", description="Run the local review server.")
+    p.add_argument("--port", type=int, default=8765, help="port on 127.0.0.1 (default 8765, 0 = any free port)")
+    args = p.parse_args(argv)
+    if not 0 <= args.port <= 65535:
+        print("error: --port must be between 0 and 65535", file=sys.stderr)
+        return 2
+    from .server import serve  # keeps http.server out of the normal CLI path
+
+    try:
+        serve(port=args.port)
+    except OSError as e:
+        print(f"error: can't listen on port {args.port}: {e}", file=sys.stderr)
+        return 2
+    return 0
+
+
 def main(argv: list[str] | None = None) -> int:
+    argv = sys.argv[1:] if argv is None else argv
+    # `serve` is a subcommand, everything else is the original `autoshorts video.mp4 ...` form.
+    # A video literally named "serve" can still be passed as ./serve.
+    if argv[:1] == ["serve"]:
+        return serve_main(argv[1:])
     args = build_parser().parse_args(argv)
     if not args.video.is_file():
         print(f"error: {args.video} not found", file=sys.stderr)
