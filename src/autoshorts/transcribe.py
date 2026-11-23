@@ -2,8 +2,10 @@
 
 from __future__ import annotations
 
+import functools
 import os
 import sys
+from collections.abc import Callable
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -26,6 +28,7 @@ def available() -> bool:
     return True
 
 
+@functools.cache
 def _add_cuda_dll_dirs() -> None:
     """The `gpu` extra installs cuBLAS/cuDNN as pip wheels (nvidia-*). On Windows their DLLs
     live in site-packages/nvidia/<lib>/bin, which isn't on the DLL search path by default."""
@@ -60,7 +63,11 @@ def _run(audio: npt.NDArray[np.float32], model_size: str, device: str, language:
 
 
 def transcribe(
-    audio: npt.NDArray[np.float32], model_size: str = "small", device: str = "auto", language: str | None = None
+    audio: npt.NDArray[np.float32],
+    model_size: str = "small",
+    device: str = "auto",
+    language: str | None = None,
+    log: Callable[[str], None] = print,
 ) -> list[Word]:
     """audio: 16 kHz mono float32, the same buffer the loudness analysis already decoded.
 
@@ -78,7 +85,7 @@ def transcribe(
     except (RuntimeError, ValueError, OSError) as err:
         if device == "cuda" or not _is_cuda_error(err):
             raise
-        print(f"GPU transcription unavailable ({err}), using CPU. `pip install autoshorts[gpu]` fixes this.")
+        log(f"GPU transcription unavailable ({err}), using CPU. `pip install autoshorts[gpu]` fixes this.")
         return _run(audio, model_size, "cpu", language)
 
 
