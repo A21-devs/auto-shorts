@@ -18,6 +18,7 @@ def fake_run(out: Path, clips: int = 2) -> Path:
     data = {"source": str(out / "src.mp4"), "duration": 60.0, "render": {"layout": "fit"}, "words": None,
             "clips": [{"start": 10.0 * i, "end": 10.0 * i + 5, "score": 1.0, "reasons": [],
                        "file": f"src_clip{i:02d}.mp4", "subtitles": None} for i in range(1, clips + 1)]}
+    (out / "src.mp4").write_bytes(b"source")
     for c in data["clips"]:
         (out / c["file"]).write_bytes(b"old clip")
     manifest = out / "manifest.json"
@@ -129,3 +130,20 @@ def test_rerender_real_clip_with_captions(tmp_path: Path):
     assert abs(clip.duration - 12.0) < 0.2
     assert "NUDGED" in (out / entry["subtitles"]).read_text(encoding="utf-8")
     assert not list(out.glob("*.tmp*"))
+
+
+def test_moved_source_is_a_clear_error(tmp_path: Path):
+    manifest = fake_run(tmp_path)
+    (tmp_path / "src.mp4").unlink()
+    with pytest.raises(ValueError, match="original video is gone"):
+        rerender_clip(manifest, 1, 5, 20, log=lambda _m: None)
+    assert (tmp_path / "src_clip01.mp4").read_bytes() == b"old clip"
+
+
+def test_mark_clip(tmp_path: Path):
+    manifest = fake_run(tmp_path)
+    assert pipeline.mark_clip(manifest, 2, True)["keep"] is True
+    assert pipeline.mark_clip(manifest, 2, None)["keep"] is None
+    assert [c.get("keep", "unset") for c in json.loads(manifest.read_text())["clips"]] == ["unset", None]
+    with pytest.raises(ValueError, match="doesn't exist"):
+        pipeline.mark_clip(manifest, 3, True)

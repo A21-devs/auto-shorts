@@ -12,11 +12,13 @@ Endpoints:
   POST /api/jobs                       {"video": path, ...options} -> {"id": ...}
   GET  /api/jobs/<id>                  state, stage, fraction, log tail, manifest or error
   GET  /api/jobs/<id>/files/<name>     a file from the job's output folder (Range supported)
+  POST /api/jobs/<id>/clips/<n>        {"start", "end"} re-renders clip n, {"keep": bool|null} records a choice
 """
 
 from __future__ import annotations
 
 import json
+import math
 import mimetypes
 import queue
 import re
@@ -26,13 +28,14 @@ import traceback
 import uuid
 from collections import deque
 from dataclasses import dataclass, field
+from functools import partial
 from http import HTTPStatus
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from typing import Any
 from urllib.parse import unquote
 
-from .pipeline import Job, run
+from .pipeline import Job, mark_clip, rerender_clip, run
 from .render import RenderOptions
 from .segment import Options
 
@@ -40,6 +43,7 @@ PAGE = Path(__file__).with_name("web") / "index.html"
 MAX_BODY = 64 * 1024
 LOG_LINES = 200
 CHUNK = 256 * 1024
+KEEP_WAIT = 2.0  # seconds a keep/drop waits for another edit of the same job to finish
 MODEL_NAME = re.compile(r"[A-Za-z0-9._-]{1,40}")
 LAYOUTS = ("blur", "crop", "fit")
 
@@ -150,7 +154,8 @@ class App:
         folder = job.out_dir.resolve()
         with self._lock:
             same = [s for s in self.jobs.values() if s.out_dir.resolve() == folder]
-            busy = next((s for s in same if s.state in ("queued", "running")), None)
+            # a finished job holding its lock is in the middle of re-rendering a clip into this folder
+            busy = next((s for s in same if s.state in ("queued", "running") or s.lock.locked()), None)
             if busy:
                 raise FolderBusy(f"job {busy.id} is still writing to {folder}")
             st = JobState(id=uuid.uuid4().hex[:12], video=job.source, out_dir=job.out_dir, job=job)
@@ -159,6 +164,22 @@ class App:
             self.jobs[st.id] = st
         self._queue.put(st)
         return st
+
+    def begin_edit(self, st: JobState, wait: float = 0.0) -> None:
+        """Takes st.lock for a clip edit, waiting up to `wait` seconds, or raises FolderBusy.
+        The caller releases it.
+
+        One edit at a time per job: two renders would write the same .tmp files, and every edit is a
+        read-modify-write of manifest.json. The superseded check happens after taking the lock and
+        under the registry lock: submit() refuses while the lock is held, so either the new job sees
+        the edit and backs off, or the edit sees the new job and backs off."""
+        acquired = st.lock.acquire(timeout=wait) if wait > 0 else st.lock.acquire(blocking=False)
+        if not acquired:
+            raise FolderBusy("this job is busy with another edit, try again in a moment")
+        with self._lock:
+            if st.superseded_by:
+                st.lock.release()
+                raise FolderBusy(f"a newer run ({st.superseded_by}) replaced these clips")
 
     def _work(self) -> None:
         while True:
@@ -258,10 +279,51 @@ class Handler(BaseHTTPRequestHandler):
                 self._send_json(HTTPStatus.OK, self._job(parts[2]).to_json())
             elif method == "GET" and len(parts) == 5 and parts[:2] == ["api", "jobs"] and parts[3] == "files":
                 self._send_file(self._job(parts[2]), parts[4])
+            elif method == "POST" and len(parts) == 5 and parts[:2] == ["api", "jobs"] and parts[3] == "clips":
+                self._edit_clip(self._job(parts[2]), parts[4])
             else:
                 self._error(HTTPStatus.NOT_FOUND, "not found")
         except _HttpError as e:
             self._error(e.status, e.message)
+
+    def _edit_clip(self, st: JobState, number: str) -> None:
+        # not str.isdigit(): that's true for "²", which int() then rejects
+        if not re.fullmatch(r"[0-9]{1,6}", number):
+            raise _HttpError(HTTPStatus.NOT_FOUND, "no such clip")
+        body = self._read_json()
+        if st.state != "done":
+            raise _HttpError(HTTPStatus.CONFLICT, "the job isn't finished")
+        if "keep" in body:
+            if body["keep"] is not None and not isinstance(body["keep"], bool):
+                raise _HttpError(HTTPStatus.BAD_REQUEST, "keep must be true, false or null")
+            action = partial(mark_clip, st.out_dir / "manifest.json", int(number), body["keep"])
+            # marking takes milliseconds, so clicking Keep on one clip right after another just queues up.
+            # During a re-render (seconds) it still gives up and says busy.
+            wait = KEEP_WAIT
+        elif "start" in body and "end" in body:
+            start, end = body["start"], body["end"]
+            if not all(isinstance(v, int | float) and not isinstance(v, bool) and math.isfinite(v)
+                       for v in (start, end)):
+                raise _HttpError(HTTPStatus.BAD_REQUEST, "start and end must be numbers of seconds")
+            action = partial(rerender_clip, st.out_dir / "manifest.json", int(number), start, end, log=st.add_log)
+            wait = 0.0
+        else:
+            raise _HttpError(HTTPStatus.BAD_REQUEST, 'send {"keep": ...} or {"start": ..., "end": ...}')
+        try:
+            self.app.begin_edit(st, wait)
+        except FolderBusy as e:
+            raise _HttpError(HTTPStatus.CONFLICT, str(e)) from None
+        try:
+            action()
+            st.manifest = json.loads((st.out_dir / "manifest.json").read_text(encoding="utf-8"))
+        except ValueError as e:
+            raise _HttpError(HTTPStatus.BAD_REQUEST, str(e)) from None
+        except Exception as e:  # ffmpeg failures and the like, the old clip is still there
+            st.add_log(f"edit failed: {e}")
+            raise _HttpError(HTTPStatus.INTERNAL_SERVER_ERROR, str(e)) from None
+        finally:
+            st.lock.release()
+        self._send_json(HTTPStatus.OK, st.to_json())
 
     def do_GET(self) -> None:  # noqa: N802 - stdlib naming
         self._dispatch("GET")

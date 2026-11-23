@@ -54,6 +54,11 @@
   .clip.drop { opacity: .45; }
   .clip.drop .drop-btn { background: var(--drop); border-color: var(--drop); color: #fff; }
   .muted { color: var(--muted); }
+  .clip .nudge { display: flex; align-items: center; gap: 6px; font-size: 13px; color: var(--muted); }
+  .clip .nudge span { width: 34px; }
+  .clip .nudge button { padding: 3px 8px; font-size: 13px; }
+  .clip.busy video { opacity: .3; }
+  .clip .actions + .actions { margin-top: 0; }
   /* Windows paths have no spaces to break on, without this they push the page wider than a phone */
   #status-line, #out-dir, #form-error { overflow-wrap: anywhere; }
   #form-error { grid-column: 1 / -1; }
@@ -116,6 +121,8 @@ const $ = (id) => document.getElementById(id);
 let currentJob = null;
 let pollTimer = null;
 let shownManifest = null;
+// nudged but not yet re-rendered times, by job + clip file, so rebuilding the cards keeps them
+const pending = new Map();
 
 // `seen` is the list of stages the job has gone through. Once it's past the point where
 // transcription would have run without running it (captions off, silent or missing audio, no
@@ -186,41 +193,115 @@ function renderClips(job) {
   if (!m) return;
   $("summary-text").textContent = `${m.clips.length} clip${m.clips.length === 1 ? "" : "s"}`;
   $("out-dir").textContent = job.out_dir;
-  for (const clip of m.clips) {
-    const card = document.createElement("article");
-    card.className = "clip";
-    const video = document.createElement("video");
-    video.controls = true;
-    video.preload = "metadata";
-    video.src = fileUrl(job.id, clip.file);
-    const meta = document.createElement("div");
-    meta.className = "meta";
-    const times = document.createElement("div");
-    times.className = "times";
-    times.textContent = `${fmt(clip.start)} - ${fmt(clip.end)}  (${(clip.end - clip.start).toFixed(1)}s)`;
-    const score = document.createElement("div");
-    score.textContent = `score ${clip.score.toFixed(2)}`;
-    const why = document.createElement("div");
-    why.className = "why";
-    why.textContent = clip.reasons.length ? clip.reasons.join(", ") : "no standout signal";
-    const actions = document.createElement("div");
-    actions.className = "actions";
-    for (const [cls, text] of [["keep", "Keep"], ["drop", "Drop"]]) {
-      const b = document.createElement("button");
-      b.type = "button";
-      b.className = `${cls}-btn`;
-      b.textContent = text;
-      b.addEventListener("click", () => {
-        const on = !card.classList.contains(cls);
-        card.classList.remove("keep", "drop");
-        if (on) card.classList.add(cls);
-      });
-      actions.append(b);
+  m.clips.forEach((clip, i) => box.append(clipCard(job, m, clip, i + 1)));
+}
+
+function el(tag, cls, text) {
+  const e = document.createElement(tag);
+  if (cls) e.className = cls;
+  if (text !== undefined) e.textContent = text;
+  return e;
+}
+
+function button(text, onClick, cls) {
+  const b = el("button", cls, text);
+  b.type = "button";
+  b.addEventListener("click", onClick);
+  return b;
+}
+
+async function editClip(job, n, body) {
+  return api(`/api/jobs/${encodeURIComponent(job.id)}/clips/${n}`, {
+    method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body),
+  });
+}
+
+function clipCard(job, manifest, clip, n) {
+  const card = el("article", "clip");
+  if (clip.keep === true) card.classList.add("keep");
+  if (clip.keep === false) card.classList.add("drop");
+  const video = el("video");
+  video.controls = true;
+  video.preload = "metadata";
+  // the file name stays the same after a re-render, so make the URL change with the times
+  const src = `${fileUrl(job.id, clip.file)}?t=${clip.start}-${clip.end}`;
+  video.src = src;
+
+  const meta = el("div", "meta");
+  const times = el("div", "times");
+  const score = el("div", null, `score ${clip.score.toFixed(2)}${clip.edited ? " (for the original range)" : ""}`);
+  const why = el("div", "why", clip.reasons.length ? clip.reasons.join(", ") : "no standout signal");
+  const err = el("div", "error");
+
+  // nudging: changes are local until Re-render is pressed
+  const key = `${job.id}/${clip.file}`;
+  let { start, end } = pending.get(key) ?? clip;
+  const showTimes = () => {
+    const changed = start !== clip.start || end !== clip.end;
+    if (changed) pending.set(key, { start, end });
+    else pending.delete(key);
+    times.textContent = `${fmt(start)} - ${fmt(end)}  (${(end - start).toFixed(1)}s)${changed ? "  edited" : ""}`;
+    rerender.disabled = !changed;
+    reset.disabled = !changed;
+  };
+  const nudge = (which, delta) => () => {
+    if (which === "start") start = Math.max(0, Math.round((start + delta) * 10) / 10);
+    else end = Math.min(manifest.duration, Math.round((end + delta) * 10) / 10);
+    showTimes();
+  };
+  const startRow = el("div", "nudge");
+  startRow.append(el("span", null, "start"), button("-1s", nudge("start", -1)), button("+1s", nudge("start", 1)));
+  const endRow = el("div", "nudge");
+  endRow.append(el("span", null, "end"), button("-1s", nudge("end", -1)), button("+1s", nudge("end", 1)));
+
+  const reset = button("Reset", () => { start = clip.start; end = clip.end; err.textContent = ""; showTimes(); });
+  const rerender = button("Re-render", async () => {
+    if (end - start < 1) { err.textContent = "a clip has to be at least 1s long"; return; }
+    err.textContent = "";
+    card.classList.add("busy");
+    rerender.disabled = reset.disabled = true;
+    rerender.textContent = "Rendering...";
+    // let go of the file first: on Windows the server can't replace a file that's still being streamed
+    video.pause();
+    video.removeAttribute("src");
+    video.load();
+    try {
+      const updated = await editClip(job, n, { start, end });
+      pending.delete(key);
+      renderStatus(updated);
+      renderClips(updated);  // manifest changed, so this rebuilds every card with fresh URLs
+    } catch (e) {
+      err.textContent = `re-render failed: ${e.message}`;
+      video.src = src;
+      rerender.textContent = "Re-render";
+      card.classList.remove("busy");
+      showTimes();
     }
-    meta.append(times, score, why, actions);
-    card.append(video, meta);
-    box.append(card);
+  }, "primary");
+
+  const keepRow = el("div", "actions");
+  for (const [cls, text, value] of [["keep", "Keep", true], ["drop", "Drop", false]]) {
+    keepRow.append(button(text, async () => {
+      const next = card.classList.contains(cls) ? null : value;
+      err.textContent = "";
+      try {
+        const updated = await editClip(job, n, { keep: next });
+        card.classList.remove("keep", "drop");
+        if (next !== null) card.classList.add(cls);
+        // remember it as shown, so a later poll doesn't rebuild the cards and stop the videos
+        shownManifest = JSON.stringify(updated.manifest);
+      } catch (e) {
+        err.textContent = `couldn't save: ${e.message}`;
+      }
+    }, `${cls}-btn`));
   }
+  const editRow = el("div", "actions");
+  editRow.append(reset, rerender);
+
+  showTimes();
+  meta.append(times, score, why, startRow, endRow, editRow, keepRow, err);
+  card.append(video, meta);
+  return card;
 }
 
 async function poll() {

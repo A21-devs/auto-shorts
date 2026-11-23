@@ -187,7 +187,11 @@ def rerender_clip(manifest: Path, n: int, start: float, end: float, log: Log = p
             words = transcribe.load_words(out_dir / data["words"])
         except (OSError, ValueError, TypeError) as e:
             log(f"can't read the transcript ({e}), re-rendering without captions")
-    info = probe(Path(data["source"]))
+    source = Path(data["source"])
+    if not source.is_file():
+        # otherwise ffprobe fails and all you get is its command line
+        raise ValueError(f"the original video is gone ({source}), was it moved or renamed?")
+    info = probe(source)
     log(f"re-rendering {entry['file']}: {start:.1f}s - {end:.1f}s")
     try:
         tmp_name, tmp_sub = _render_one(info, words, start, end, out_dir, base,
@@ -208,3 +212,14 @@ def rerender_clip(manifest: Path, n: int, start: float, end: float, log: Log = p
     entry.update(start=round(start, 2), end=round(end, 2), edited=True)
     _write_manifest(manifest, data)
     return dict(entry)
+
+
+def mark_clip(manifest: Path, n: int, keep: bool | None) -> dict[str, Any]:
+    """Records a keep (True) / drop (False) / undecided (None) choice for clip n in manifest.json."""
+    data = json.loads(manifest.read_text(encoding="utf-8"))
+    clips = data["clips"]
+    if not 1 <= n <= len(clips):
+        raise ValueError(f"clip {n} doesn't exist, this run has {len(clips)}")
+    clips[n - 1]["keep"] = keep
+    _write_manifest(manifest, data)
+    return dict(clips[n - 1])
