@@ -33,8 +33,11 @@ def camera_path(focus: FloatArray, step: float, window: float, max_speed: float 
     keys: Keyframes = [(0.0, cur)]
     moving = False
     limit = max_speed * step
+    goal = cur  # last known target, so a still second mid-pan doesn't end the pan
     for i, v in enumerate(targets):
-        target = cur if math.isnan(v) else reachable(float(v))
+        if not math.isnan(v):
+            goal = reachable(float(v))
+        target = goal if moving or not math.isnan(v) else cur
         # dead zone with hysteresis: hold still while the action is inside the middle half of the
         # crop, but once a pan starts, keep going until the action is close to the centre again
         # (stopping at the dead zone edge would park every subject a quarter crop off-centre)
@@ -58,7 +61,14 @@ def smooth(focus: FloatArray) -> list[float]:
     for i in range(n):
         lo = max(0, min(i - 1, n - 3))
         near = [float(v) for v in focus[lo:lo + 3] if not math.isnan(v)]
-        out.append(float(np.median(near)) if near and not math.isnan(focus[i]) else math.nan)
+        if math.isnan(focus[i]):
+            out.append(math.nan)
+        elif len(near) < 3:
+            # the median of 2 is their mean, a spot where nothing may be. With 2 there's no
+            # outlier to reject anyway, so trust this window
+            out.append(float(focus[i]))
+        else:
+            out.append(float(np.median(near)))
     return out
 
 

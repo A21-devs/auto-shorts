@@ -75,6 +75,19 @@ def test_start_position_is_a_real_focus_value_not_a_blend():
     assert keys[0][1] == pytest.approx(1 - 0.316 / 2)
 
 
+def test_a_still_second_mid_pan_does_not_end_the_pan():
+    keys = camera_path(_f(*([0.3] * 3 + [0.6, NAN] + [0.6] * 8)), 1.0, window=0.316)
+    assert keys[-1][1] > 0.6 - 0.316 / 16 - 1e-6
+    # and it kept moving through the NaN second (t = 4.5)
+    cs = dict(keys)
+    assert 4.5 not in cs or cs[4.5] > cs.get(3.5, 0.3)
+
+
+def test_two_known_values_are_not_averaged():
+    keys = camera_path(_f(0.9, NAN, 0.54), 1.0, window=0.316)
+    assert keys[0][1] == pytest.approx(1 - 0.316 / 2)
+
+
 def test_simplify_drops_points_on_a_line():
     keys = [(0.0, 0.5), (1.0, 0.5), (2.0, 0.5), (3.0, 0.6), (4.0, 0.7), (5.0, 0.7)]
     assert simplify(keys) == [(0.0, 0.5), (2.0, 0.5), (4.0, 0.7), (5.0, 0.7)]
