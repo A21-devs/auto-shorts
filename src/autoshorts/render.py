@@ -11,9 +11,10 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Literal
 
+from . import follow, motion
 from .probe import MediaInfo, require
 
-Layout = Literal["crop", "blur", "fit"]
+Layout = Literal["crop", "blur", "fit", "follow"]
 
 W, H = 1080, 1920
 SAFE_NAME = re.compile(r"[A-Za-z0-9_.-]+")
@@ -55,10 +56,15 @@ def pick_encoder(requested: str) -> str:
     return "h264_nvenc" if encoder_works("h264_nvenc") else "libx264"
 
 
-def video_filter(layout: Layout, subtitle_file: str | None, fps: float, max_fps: int) -> str:
-    """filter_complex graph from [0:v] to [vout]."""
-    if layout == "crop":
+def video_filter(layout: Layout, subtitle_file: str | None, fps: float, max_fps: int,
+                 crop_x: str | None = None) -> str:
+    """filter_complex graph from [0:v] to [vout]. `crop_x` is the x expression for "follow"
+    (without one it behaves like "crop")."""
+    if layout == "crop" or (layout == "follow" and not crop_x):
         g = f"[0:v]scale={W}:{H}:force_original_aspect_ratio=increase,crop={W}:{H},setsar=1[v]"
+    elif layout == "follow":
+        g = (f"[0:v]scale={W}:{H}:force_original_aspect_ratio=increase,"
+             f"crop=w={W}:h={H}:x='{crop_x}':y='(ih-oh)/2',setsar=1[v]")
     elif layout == "fit":
         g = (f"[0:v]scale={W}:{H}:force_original_aspect_ratio=decrease,"
              f"pad={W}:{H}:(ow-iw)/2:(oh-ih)/2:black,setsar=1[v]")
@@ -136,11 +142,12 @@ def fit_gain(info: MediaInfo, start: float, end: float) -> float | None:
 
 
 def build_command(info: MediaInfo, start: float, end: float, out: Path, opts: RenderOptions,
-                  subtitle_file: str | None = None, gain_db: float | None = None) -> list[str]:
+                  subtitle_file: str | None = None, gain_db: float | None = None,
+                  crop_x: str | None = None) -> list[str]:
     enc = pick_encoder(opts.encoder)
     cmd = [require("ffmpeg"), "-hide_banner", "-y", "-ss", f"{start:.3f}", "-t", f"{end - start:.3f}",
            "-i", str(info.path),
-           "-filter_complex", video_filter(opts.layout, subtitle_file, info.fps, opts.max_fps),
+           "-filter_complex", video_filter(opts.layout, subtitle_file, info.fps, opts.max_fps, crop_x),
            "-map", "[vout]"]
     # the filter graph reads [0:v], make sure it's the stream we probed (not a cover image)
     cmd[cmd.index("-filter_complex") + 1] = cmd[cmd.index("-filter_complex") + 1].replace(
@@ -157,6 +164,17 @@ def build_command(info: MediaInfo, start: float, end: float, out: Path, opts: Re
     return cmd
 
 
+def follow_crop_x(info: MediaInfo, start: float, end: float) -> str | None:
+    """crop x expression that pans toward the action in [start, end], or None when the source is
+    already 9:16 or narrower (nothing to pan)."""
+    scaled_w = info.width * H / info.height
+    if scaled_w <= W + 1:
+        return None
+    m = motion.read_motion(info.path, info.video_stream, info.width, info.height, start, end - start)
+    keys = follow.camera_path(motion.focus(m, window=1.0), step=1.0, window=W / scaled_w)
+    return follow.crop_x_expr(keys)
+
+
 def render(info: MediaInfo, start: float, end: float, out: Path, opts: RenderOptions,
            subtitle_file: str | None = None, workdir: Path | None = None) -> None:
     # libass paths on Windows need escaping (C\:/...), running in the subtitle's folder
@@ -169,7 +187,8 @@ def render(info: MediaInfo, start: float, end: float, out: Path, opts: RenderOpt
         shutil.copyfile(base / subtitle_file, temp_sub)
         subtitle_file = temp_sub.name
     gain = fit_gain(info, start, end) if info.has_audio and opts.normalize_audio else None
-    cmd = build_command(info, start, end, out.resolve(), opts, subtitle_file, gain)
+    crop_x = follow_crop_x(info, start, end) if opts.layout == "follow" else None
+    cmd = build_command(info, start, end, out.resolve(), opts, subtitle_file, gain, crop_x)
     try:
         proc = subprocess.run(cmd, cwd=workdir, capture_output=True, text=True, errors="replace")
     finally:

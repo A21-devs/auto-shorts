@@ -42,6 +42,7 @@ For each clip:
 Layouts (`--layout`):
 - `blur` (default): the full video fits the width, with a blurred zoomed copy behind it
 - `crop`: fills the frame (center crop)
+- `follow`: fills the frame and pans slowly toward where the motion is (good for gameplay)
 - `fit`: black bars
 
 ## Review in the browser

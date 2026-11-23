@@ -45,7 +45,7 @@ LOG_LINES = 200
 CHUNK = 256 * 1024
 KEEP_WAIT = 2.0  # seconds a keep/drop waits for another edit of the same job to finish
 MODEL_NAME = re.compile(r"[A-Za-z0-9._-]{1,40}")
-LAYOUTS = ("blur", "crop", "fit")
+LAYOUTS = ("blur", "crop", "follow", "fit")
 
 
 class BadRequest(ValueError):
