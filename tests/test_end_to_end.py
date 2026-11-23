@@ -20,7 +20,16 @@ def test_pipeline_finds_the_loud_part_and_renders_vertical(tmp_path: Path):
     make_video(src)
     job = Job(source=src, out_dir=tmp_path / "out", clips=Options(count=1, min_len=15, max_len=25),
               render=RenderOptions(encoder="libx264"), captions=False)
-    manifest = json.loads(run(job, log=lambda _m: None).read_text())
+    events: list[tuple[str, float]] = []
+    manifest = json.loads(run(job, log=lambda _m: None, progress=lambda s, f: events.append((s, f))).read_text())
+
+    # no captions here, so no transcribe stage
+    stages = list(dict.fromkeys(s for s, _ in events))
+    assert stages == ["audio", "scenes", "render", "done"]
+    for stage in stages:
+        fractions = [f for s, f in events if s == stage]
+        assert fractions == sorted(fractions) and fractions[-1] == 1.0
+    assert events[-1] == ("done", 1.0)
 
     clip = manifest["clips"][0]
     assert clip["start"] <= 45 and clip["end"] >= 50

@@ -48,19 +48,44 @@ def _is_cuda_error(err: Exception) -> bool:
     return any(k in msg for k in ("cublas", "cudnn", "cuda", "libcudart"))
 
 
-def _run(audio: npt.NDArray[np.float32], model_size: str, device: str, language: str | None) -> list[Word]:
+Fraction = Callable[[float], None]
+SAMPLE_RATE = 16_000  # what audio.decode_pcm gives us, and what whisper expects
+
+
+def _run(audio: npt.NDArray[np.float32], model_size: str, device: str, language: str | None,
+         on_progress: Fraction | None = None) -> list[Word]:
     from faster_whisper import WhisperModel
 
     model = WhisperModel(model_size, device=device, compute_type="float16" if device == "cuda" else "int8")
     segments, _ = model.transcribe(audio, word_timestamps=True, vad_filter=True, language=language)
     words: list[Word] = []
+    duration = len(audio) / SAMPLE_RATE
     # segments is a lazy generator, the actual GPU work happens while iterating
     for seg in segments:
         for w in seg.words or []:
             text = w.word.strip()
             if text:
                 words.append(Word(float(w.start), float(w.end), text))
+        if on_progress and duration > 0:
+            on_progress(float(seg.end) / duration)
     return words
+
+
+def monotonic(cb: Fraction | None) -> Fraction | None:
+    """Clamps to [0, 1] and never reports a smaller value than before (the CPU retry after a
+    CUDA failure starts over from 0)."""
+    if cb is None:
+        return None
+    best = 0.0
+
+    def report(f: float) -> None:
+        nonlocal best
+        f = min(1.0, max(0.0, f))
+        if f > best:
+            best = f
+            cb(f)
+
+    return report
 
 
 def transcribe(
@@ -69,6 +94,7 @@ def transcribe(
     device: str = "auto",
     language: str | None = None,
     log: Callable[[str], None] = print,
+    on_progress: Fraction | None = None,
 ) -> list[Word]:
     """audio: 16 kHz mono float32, the same buffer the loudness analysis already decoded.
 
@@ -77,17 +103,20 @@ def transcribe(
 
     device="auto" tries CUDA first and falls back to CPU if the CUDA libraries are missing,
     which faster-whisper only reports once decoding starts.
+
+    on_progress gets the fraction of the audio transcribed so far, after each whisper segment.
     """
+    progress = monotonic(on_progress)
     if device == "cpu":
-        return _run(audio, model_size, "cpu", language)
+        return _run(audio, model_size, "cpu", language, progress)
     _add_cuda_dll_dirs()
     try:
-        return _run(audio, model_size, "cuda", language)
+        return _run(audio, model_size, "cuda", language, progress)
     except (RuntimeError, ValueError, OSError) as err:
         if device == "cuda" or not _is_cuda_error(err):
             raise
         log(f"GPU transcription unavailable ({err}), using CPU. `pip install autoshorts[gpu]` fixes this.")
-        return _run(audio, model_size, "cpu", language)
+        return _run(audio, model_size, "cpu", language, progress)
 
 
 def save_words(words: list[Word], path: Path) -> None:

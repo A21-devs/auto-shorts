@@ -19,6 +19,9 @@ from .probe import MediaInfo, probe
 from .render import RenderOptions, render
 
 Log = Callable[[str], None]
+# (stage, fraction of that stage done). Stages in order: audio, scenes, transcribe (only with
+# captions), render, done. Fractions go from 0 to 1 and never go down within a stage.
+Progress = Callable[[str, float], None]
 
 MIN_CLIP = 1.0  # shortest range rerender_clip accepts, in seconds
 
@@ -35,9 +38,15 @@ class Job:
     hop: float = 0.5
 
 
-def analyze(info: MediaInfo, job: Job, log: Log) -> tuple[segment.Signals, list[transcribe.Word]]:
+def _no_progress(_stage: str, _fraction: float) -> None:
+    pass
+
+
+def analyze(info: MediaInfo, job: Job, log: Log,
+            progress: Progress = _no_progress) -> tuple[segment.Signals, list[transcribe.Word]]:
     t = time.perf_counter()
     pcm = None
+    progress("audio", 0.0)
     if info.has_audio:
         log("reading audio")
         pcm = audio.decode_pcm(info.path)
@@ -53,14 +62,20 @@ def analyze(info: MediaInfo, job: Job, log: Log) -> tuple[segment.Signals, list[
     else:
         db = np.zeros(int(info.duration / job.hop))
         quiet = []
+    progress("audio", 1.0)
     log("finding scene cuts")
+    progress("scenes", 0.0)
     cuts = scenes.detect_cuts(info.path, info.video_stream)
+    progress("scenes", 1.0)
 
     words: list[transcribe.Word] = []
     if job.captions and pcm is not None:
         if transcribe.available():
             log(f"transcribing (whisper {job.whisper_model})")
-            words = transcribe.transcribe(pcm, job.whisper_model, language=job.language, log=log)
+            progress("transcribe", 0.0)
+            words = transcribe.transcribe(pcm, job.whisper_model, language=job.language, log=log,
+                                          on_progress=lambda f: progress("transcribe", f))
+            progress("transcribe", 1.0)
         else:
             log("faster-whisper not installed, skipping captions (pip install autoshorts[transcribe])")
 
@@ -107,10 +122,10 @@ def _write_manifest(path: Path, data: dict[str, Any]) -> None:
     os.replace(tmp, path)
 
 
-def run(job: Job, log: Log = print) -> Path:
+def run(job: Job, log: Log = print, progress: Progress = _no_progress) -> Path:
     info = probe(job.source)
     log(f"{info.path.name}: {info.duration / 60:.1f} min, {info.width}x{info.height} @ {info.fps:.0f}fps")
-    sig, words = analyze(info, job, log)
+    sig, words = analyze(info, job, log, progress)
     clips = segment.find_clips(sig, job.clips)
     if not clips:
         raise RuntimeError("no clips found, is the video shorter than --min?")
@@ -126,6 +141,7 @@ def run(job: Job, log: Log = print) -> Path:
         words_file = f"{stem}_words.json"
         transcribe.save_words(words, out_dir / words_file)
     results = []
+    progress("render", 0.0)
     for i, clip in enumerate(clips, 1):
         why = ", ".join(clip.reasons)
         log(f"[{i}/{len(clips)}] {clip.start:7.1f}s - {clip.end:7.1f}s  score {clip.score:5.2f}  {why}")
@@ -133,10 +149,12 @@ def run(job: Job, log: Log = print) -> Path:
         name, sub = _render_one(info, words, clip.start, clip.end, out_dir, f"{stem}_clip{i:02d}", job.render)
         log(f"         rendered {name} in {time.perf_counter() - t:.1f}s")
         results.append({**asdict(clip), "file": name, "subtitles": sub})
+        progress("render", i / len(clips))
 
     manifest = out_dir / "manifest.json"
     _write_manifest(manifest, {"source": str(info.path), "duration": info.duration, "render": asdict(job.render),
                                "words": words_file, "clips": results})
+    progress("done", 1.0)
     return manifest
 
 
