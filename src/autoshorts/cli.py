@@ -20,8 +20,9 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("-n", "--count", type=int, default=6, help="how many clips (default 6)")
     p.add_argument("--min", dest="min_len", type=float, default=20, help="shortest clip in seconds (default 20)")
     p.add_argument("--max", dest="max_len", type=float, default=55, help="longest clip in seconds (default 55)")
-    p.add_argument("--layout", choices=["blur", "crop", "fit"], default="blur",
-                   help="blur = video on a blurred background, crop = fill the frame, fit = black bars")
+    p.add_argument("--layout", choices=["blur", "crop", "follow", "fit"], default="blur",
+                   help="blur = video on a blurred background, crop = fill the frame, "
+                        "follow = fill the frame and pan toward the action, fit = black bars")
     p.add_argument("--no-captions", action="store_true", help="skip transcription and captions")
     p.add_argument("--model", default="small", help="whisper model size (tiny, base, small, medium, large-v3)")
     p.add_argument("--language", help="force a language code like en (default: auto detect)")

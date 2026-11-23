@@ -101,8 +101,9 @@ def focus(motion: Motion, window: float = 1.0, still: float = STILL) -> FloatArr
     """Horizontal position of the action per `window` seconds, 0 = left edge, 1 = right edge.
 
     The per-frame median column is subtracted first, so motion spread over the whole picture
-    (a camera pan, a fade) cancels out and only motion concentrated in part of the frame pulls
-    the centre. Windows where nothing stands out are NaN, meaning "no opinion, stay put".
+    (a camera pan, a fade) cancels out, then only columns with at least half the strongest
+    column's motion pull the centre. Windows where nothing stands out are NaN, meaning
+    "no opinion, stay put".
     """
     cols = motion.columns
     per = max(1, int(round(window * motion.fps)))
@@ -118,6 +119,9 @@ def focus(motion: Motion, window: float = 1.0, still: float = STILL) -> FloatArr
         if lo >= min(hi, len(cols)) or float(cols[lo:hi].mean()) < still:
             continue
         weights = excess[lo:hi].sum(axis=0)
+        # only the strongest motion counts: with two things moving, a plain centroid lands
+        # between them where nothing is happening
+        weights = np.where(weights >= 0.5 * float(weights.max()), weights, 0)
         total = float(weights.sum())
         if total > 0:
             out[i] = float((weights * x).sum() / total)
