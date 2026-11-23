@@ -1,8 +1,11 @@
-"""Renders one clip to a 1080x1920 MP4 with ffmpeg."""
+﻿"""Renders one clip to a 1080x1920 MP4 with ffmpeg."""
 
 from __future__ import annotations
 
 import functools
+import json
+import re
+import shutil
 import subprocess
 from dataclasses import dataclass
 from pathlib import Path
@@ -13,6 +16,7 @@ from .probe import MediaInfo, require
 Layout = Literal["crop", "blur", "fit"]
 
 W, H = 1080, 1920
+SAFE_NAME = re.compile(r"[A-Za-z0-9_.-]+")
 
 
 @dataclass(frozen=True)
@@ -75,8 +79,64 @@ def video_filter(layout: Layout, subtitle_file: str | None, fps: float, max_fps:
     return g
 
 
+TARGET_LUFS = -14.0
+PEAK_LIMIT = 0.841  # -1.5 dBFS, linear
+MAX_GAIN_DB = 24.0
+
+
+def parse_integrated(stderr: str) -> float | None:
+    """input_i from the JSON block loudnorm prints in measuring mode. None for silence."""
+    start, end = stderr.rfind("{"), stderr.rfind("}")
+    if start < 0 or end < start:
+        return None
+    try:
+        value = json.loads(stderr[start:end + 1]).get("input_i")
+        i = float(value)
+    except (json.JSONDecodeError, TypeError, ValueError):
+        return None
+    return i if i > -70 else None  # -inf / near-silent: nothing to normalize
+
+
+def gain_chain(gain_db: float) -> str:
+    """Make-up gain followed by a peak limiter.
+
+    Plain loudnorm can't hit -14 LUFS on peaky speech: it refuses to push true peak past the
+    limit and silently drops to its cautious dynamic mode (measured -18 to -19 LUFS on test
+    clips). Gain + limiter gets to the target and keeps peaks at -1.5 dBFS.
+    """
+    return f"volume={gain_db:.2f}dB,alimiter=limit={PEAK_LIMIT}:attack=5:release=50:level=disabled"
+
+
+def measure(info: MediaInfo, start: float, end: float, chain: str | None = None) -> float | None:
+    af = f"{chain + ',' if chain else ''}loudnorm=I={TARGET_LUFS}:print_format=json"
+    proc = subprocess.run(
+        [require("ffmpeg"), "-hide_banner", "-nostats", "-ss", f"{start:.3f}", "-t", f"{end - start:.3f}",
+         "-i", str(info.path), "-map", "0:a:0", "-af", af, "-f", "null", "-"],
+        capture_output=True, text=True, errors="replace",
+    )
+    return parse_integrated(proc.stderr) if proc.returncode == 0 else None
+
+
+def fit_gain(info: MediaInfo, start: float, end: float) -> float | None:
+    """Gain that lands the clip on TARGET_LUFS after limiting. The limiter eats some loudness
+    on peaky audio, so measure once more through the chain and correct. Audio-only passes run
+    at ~40x realtime, so this is well under a second per clip."""
+    loud = measure(info, start, end)
+    if loud is None:
+        return None
+    gain = TARGET_LUFS - loud
+    # the more gain, the more the limiter eats, so a single correction undershoots (-15.5 on
+    # test clips). A few cheap iterations converge to within half a dB.
+    for _ in range(4):
+        after = measure(info, start, end, gain_chain(gain))
+        if after is None or abs(TARGET_LUFS - after) < 0.5:
+            break
+        gain = max(-MAX_GAIN_DB, min(MAX_GAIN_DB, gain + (TARGET_LUFS - after)))
+    return gain
+
+
 def build_command(info: MediaInfo, start: float, end: float, out: Path, opts: RenderOptions,
-                  subtitle_file: str | None = None) -> list[str]:
+                  subtitle_file: str | None = None, gain_db: float | None = None) -> list[str]:
     enc = pick_encoder(opts.encoder)
     cmd = [require("ffmpeg"), "-hide_banner", "-y", "-ss", f"{start:.3f}", "-t", f"{end - start:.3f}",
            "-i", str(info.path),
@@ -87,8 +147,8 @@ def build_command(info: MediaInfo, start: float, end: float, out: Path, opts: Re
         "[0:v]", f"[0:{info.video_stream}]", 1)
     if info.has_audio:
         cmd += ["-map", "0:a:0", "-c:a", "aac", "-b:a", "160k", "-ar", "48000"]
-        if opts.normalize_audio:
-            cmd += ["-af", "loudnorm=I=-14:TP=-1.5:LRA=11"]
+        if opts.normalize_audio and gain_db is not None:
+            cmd += ["-af", gain_chain(gain_db)]
     if enc == "h264_nvenc":
         cmd += ["-c:v", "h264_nvenc", "-preset", "p5", "-rc", "vbr", "-cq", str(opts.quality), "-b:v", "0"]
     else:
@@ -100,9 +160,21 @@ def build_command(info: MediaInfo, start: float, end: float, out: Path, opts: Re
 def render(info: MediaInfo, start: float, end: float, out: Path, opts: RenderOptions,
            subtitle_file: str | None = None, workdir: Path | None = None) -> None:
     # libass paths on Windows need escaping (C\:/...), running in the subtitle's folder
-    # with a bare file name avoids that whole mess
-    cmd = build_command(info, start, end, out.resolve(), opts, subtitle_file)
-    proc = subprocess.run(cmd, cwd=workdir, capture_output=True, text=True, errors="replace")
+    # with a bare file name avoids that. The name itself also goes into the filter graph,
+    # where , ; ' [ ] and : mean something, so anything unusual gets a safe temp name.
+    temp_sub: Path | None = None
+    if subtitle_file and not SAFE_NAME.fullmatch(subtitle_file):
+        base = workdir or Path.cwd()
+        temp_sub = base / f"_autoshorts_{out.stem.encode().hex()[:16]}.ass"
+        shutil.copyfile(base / subtitle_file, temp_sub)
+        subtitle_file = temp_sub.name
+    gain = fit_gain(info, start, end) if info.has_audio and opts.normalize_audio else None
+    cmd = build_command(info, start, end, out.resolve(), opts, subtitle_file, gain)
+    try:
+        proc = subprocess.run(cmd, cwd=workdir, capture_output=True, text=True, errors="replace")
+    finally:
+        if temp_sub:
+            temp_sub.unlink(missing_ok=True)
     if proc.returncode != 0:
         tail = "\n".join(proc.stderr.strip().splitlines()[-15:])
         raise RuntimeError(f"ffmpeg failed for {out.name}:\n{tail}")
