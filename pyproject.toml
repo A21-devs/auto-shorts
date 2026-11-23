@@ -1,0 +1,45 @@
+[project]
+name = "autoshorts"
+version = "0.1.0"
+description = "Turn long videos into vertical short clips with captions, automatically."
+readme = "README.md"
+license = "MIT"
+requires-python = ">=3.12"
+dependencies = [
+    "numpy>=2.1",
+]
+
+[project.optional-dependencies]
+# speech-to-text for captions and smarter cut points (pulls in ctranslate2)
+transcribe = ["faster-whisper>=1.1"]
+# CUDA 12 libraries for GPU transcription (NVIDIA cards)
+gpu = ["faster-whisper>=1.1", "nvidia-cublas-cu12>=12.4,<12.9", "nvidia-cudnn-cu12>=9,<10"]
+
+[project.scripts]
+autoshorts = "autoshorts.cli:main"
+
+[dependency-groups]
+dev = ["pytest>=8.3", "ruff>=0.8", "mypy>=1.13"]
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.ruff]
+line-length = 120
+target-version = "py312"
+
+[tool.ruff.lint]
+select = ["E", "F", "W", "I", "B", "UP", "SIM"]
+
+[tool.mypy]
+strict = true
+files = ["src"]
+
+[[tool.mypy.overrides]]
+module = ["faster_whisper.*"]
+ignore_missing_imports = true
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+markers = ["ffmpeg: needs ffmpeg/ffprobe on PATH"]
