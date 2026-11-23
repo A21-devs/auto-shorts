@@ -121,6 +121,8 @@ const $ = (id) => document.getElementById(id);
 let currentJob = null;
 let pollTimer = null;
 let shownManifest = null;
+// nudged but not yet re-rendered times, by job + clip file, so rebuilding the cards keeps them
+const pending = new Map();
 
 // `seen` is the list of stages the job has gone through. Once it's past the point where
 // transcription would have run without running it (captions off, silent or missing audio, no
@@ -232,9 +234,12 @@ function clipCard(job, manifest, clip, n) {
   const err = el("div", "error");
 
   // nudging: changes are local until Re-render is pressed
-  let start = clip.start, end = clip.end;
+  const key = `${job.id}/${clip.file}`;
+  let { start, end } = pending.get(key) ?? clip;
   const showTimes = () => {
     const changed = start !== clip.start || end !== clip.end;
+    if (changed) pending.set(key, { start, end });
+    else pending.delete(key);
     times.textContent = `${fmt(start)} - ${fmt(end)}  (${(end - start).toFixed(1)}s)${changed ? "  edited" : ""}`;
     rerender.disabled = !changed;
     reset.disabled = !changed;
@@ -262,6 +267,7 @@ function clipCard(job, manifest, clip, n) {
     video.load();
     try {
       const updated = await editClip(job, n, { start, end });
+      pending.delete(key);
       renderStatus(updated);
       renderClips(updated);  // manifest changed, so this rebuilds every card with fresh URLs
     } catch (e) {

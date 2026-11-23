@@ -187,7 +187,11 @@ def rerender_clip(manifest: Path, n: int, start: float, end: float, log: Log = p
             words = transcribe.load_words(out_dir / data["words"])
         except (OSError, ValueError, TypeError) as e:
             log(f"can't read the transcript ({e}), re-rendering without captions")
-    info = probe(Path(data["source"]))
+    source = Path(data["source"])
+    if not source.is_file():
+        # otherwise ffprobe fails and all you get is its command line
+        raise ValueError(f"the original video is gone ({source}), was it moved or renamed?")
+    info = probe(source)
     log(f"re-rendering {entry['file']}: {start:.1f}s - {end:.1f}s")
     try:
         tmp_name, tmp_sub = _render_one(info, words, start, end, out_dir, base,

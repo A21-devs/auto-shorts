@@ -329,6 +329,8 @@ def test_rerender_goes_through_rerender_clip(srv, video: Path, monkeypatch: pyte
     ("clips/1", {"start": True, "end": 5}, 400, "numbers"),
     ("clips/9", {"keep": True}, 400, "doesn't exist"),
     ("clips/x", {"keep": True}, 404, "no such clip"),
+    ("clips/%C2%B2", {"keep": True}, 404, "no such clip"),  # "²".isdigit() is True
+    ("clips/1234567", {"keep": True}, 404, "no such clip"),
     ("clips/0", {"keep": True}, 400, "doesn't exist"),
 ])
 def test_bad_edits(srv, video: Path, path: str, body: dict[str, Any], status: int, msg: str):

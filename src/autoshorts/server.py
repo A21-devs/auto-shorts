@@ -287,7 +287,8 @@ class Handler(BaseHTTPRequestHandler):
             self._error(e.status, e.message)
 
     def _edit_clip(self, st: JobState, number: str) -> None:
-        if not number.isdigit():
+        # not str.isdigit(): that's true for "²", which int() then rejects
+        if not re.fullmatch(r"[0-9]{1,6}", number):
             raise _HttpError(HTTPStatus.NOT_FOUND, "no such clip")
         body = self._read_json()
         if st.state != "done":
