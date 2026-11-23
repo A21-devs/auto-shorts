@@ -44,9 +44,21 @@ def test_constant_music_has_no_dead_air():
     assert dead_air(pcm, SR) == []
 
 
-def test_threshold_has_a_floor():
-    assert dead_air_threshold(np.full(10, -70.0)) == -50.0
-    assert dead_air_threshold(np.zeros(0)) == -50.0
+def test_threshold_stays_above_the_silence_clamp():
+    assert dead_air_threshold(np.full(10, -50.0)) == -49.0
+    assert dead_air_threshold(np.zeros(0)) == -49.0
+
+
+def test_quiet_mic_still_gets_cuts():
+    # speech peaking around -33 dBFS: 25 dB under that is below the clamp
+    pcm = np.concatenate([_tone(2, 0.03), _quiet(1.0), _tone(2, 0.03)])
+    assert len(dead_air(pcm, SR)) == 1
+
+
+def test_mostly_silent_clip_uses_the_speech_level():
+    pcm = np.concatenate([_tone(2), _quiet(20), _tone(2), _quiet(20)])
+    pauses = dead_air(pcm, SR)
+    assert [(round(a), round(b)) for a, b in pauses] == [(2, 22), (24, 44)]
 
 
 def test_keep_ranges_pads_both_sides():

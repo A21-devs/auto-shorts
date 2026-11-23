@@ -30,10 +30,16 @@ def dead_air_threshold(db: npt.NDArray[np.float64]) -> float:
     An absolute -40 dB misses pauses over room noise or quiet music, and the 10th percentile
     (audio.quiet_threshold) always finds "silence" even in a clip with constant game sound.
     25 dB under the loud parts (90th percentile) catches real pauses and leaves music alone.
+
+    The percentile only looks at windows above the digital-silence clamp, otherwise a clip that's
+    mostly waiting with a few seconds of talk gets the silence level as its "loud" level. The
+    result stays above the clamp, since silences() needs windows strictly below it.
     """
-    if len(db) == 0:
-        return audio.SILENCE_DB
-    return max(audio.SILENCE_DB, float(np.percentile(db, 90)) - RANGE_DB)
+    floor = audio.SILENCE_DB + 1.0
+    sound = db[db > floor]
+    if len(sound) == 0:
+        return floor
+    return max(floor, float(np.percentile(sound, 90)) - RANGE_DB)
 
 
 def dead_air(samples: npt.NDArray[np.float32], sample_rate: int = audio.SAMPLE_RATE,
