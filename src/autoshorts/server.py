@@ -65,6 +65,8 @@ class JobState:
     error: str | None = None
     manifest: dict[str, Any] | None = None
     superseded_by: str | None = None  # a later job that wrote to the same folder
+    # every stage reported so far, so the page can tell transcription was skipped
+    stages: list[str] = field(default_factory=list)
     log: deque[str] = field(default_factory=lambda: deque(maxlen=LOG_LINES))
     lock: threading.Lock = field(default_factory=threading.Lock)
 
@@ -72,12 +74,15 @@ class JobState:
         self.log.append(line)
 
     def set_progress(self, stage: str, fraction: float) -> None:
+        if stage not in self.stages:
+            self.stages.append(stage)
         self.stage, self.fraction = stage, fraction
 
     def to_json(self, log_lines: int = 50) -> dict[str, Any]:
         return {
             "id": self.id, "video": str(self.video), "out_dir": str(self.out_dir), "created": self.created,
             "state": self.state, "stage": self.stage, "fraction": round(self.fraction, 4),
+            "stages": list(self.stages),
             "error": self.error, "log": list(self.log)[-log_lines:] if log_lines else [],
             "manifest": self.manifest, "superseded_by": self.superseded_by,
         }

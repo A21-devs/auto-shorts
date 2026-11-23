@@ -54,6 +54,12 @@
   .clip.drop { opacity: .45; }
   .clip.drop .drop-btn { background: var(--drop); border-color: var(--drop); color: #fff; }
   .muted { color: var(--muted); }
+  /* Windows paths have no spaces to break on, without this they push the page wider than a phone */
+  #status-line, #out-dir, #form-error { overflow-wrap: anywhere; }
+  #form-error { grid-column: 1 / -1; }
+  #form-error:empty, #notice:empty { display: none; }
+  #notice { margin-top: 16px; padding: 10px 12px; border: 1px solid var(--line); border-radius: 8px; }
+  #notice a { color: var(--accent); }
 </style>
 </head>
 <body>
@@ -79,7 +85,10 @@
     </label>
     <label class="check"><input type="checkbox" name="captions" checked> Captions</label>
     <button class="primary" type="submit">Make shorts</button>
+    <!-- separate from #error so the next status poll doesn't wipe it -->
+    <div class="error" id="form-error" role="alert"></div>
   </form>
+  <div id="notice"></div>
 
   <section class="status" id="status" hidden>
     <div id="status-line"></div>
@@ -108,11 +117,17 @@ let currentJob = null;
 let pollTimer = null;
 let shownManifest = null;
 
-function overall(stage, fraction) {
+// `seen` is the list of stages the job has gone through. Once it's past the point where
+// transcription would have run without running it (captions off, silent or missing audio, no
+// whisper), its share is spread over the rest so the bar doesn't jump.
+function overall(stage, fraction, seen) {
   if (stage === "done") return 1;
+  const skipped = ORDER.indexOf(stage) > ORDER.indexOf("transcribe") && !seen.includes("transcribe");
+  const order = skipped ? ORDER.filter((s) => s !== "transcribe") : ORDER;
+  const sum = order.reduce((a, s) => a + WEIGHTS[s], 0);
   let total = 0;
-  for (const s of ORDER) {
-    if (s === stage) return total + WEIGHTS[s] * fraction;
+  for (const s of order) {
+    if (s === stage) return (total + WEIGHTS[s] * fraction) / sum;
     total += WEIGHTS[s];
   }
   return 0;
@@ -139,7 +154,7 @@ function renderStatus(job) {
   const label = job.state === "queued" ? "waiting for the job before it"
     : job.state === "error" ? "failed"
     : LABELS[job.stage] || job.stage || "starting";
-  const pct = Math.round(overall(job.stage, job.fraction) * 100);
+  const pct = Math.round(overall(job.stage, job.fraction, job.stages) * 100);
   $("status-line").textContent = `${job.video} - ${label}${job.state === "running" ? ` (${pct}%)` : ""}`;
   $("bar").style.width = `${job.state === "done" ? 100 : pct}%`;
   $("error").textContent = job.error || "";
@@ -147,8 +162,20 @@ function renderStatus(job) {
   $("log").scrollTop = $("log").scrollHeight;
 }
 
+function renderNotice(job) {
+  const box = $("notice");
+  box.replaceChildren();
+  if (!job.superseded_by) return;
+  // a newer run wrote to the same folder, so this job's manifest no longer matches the files
+  const link = document.createElement("a");
+  link.href = `#${job.superseded_by}`;
+  link.textContent = "open the newer run";
+  link.addEventListener("click", (ev) => { ev.preventDefault(); watch(job.superseded_by); });
+  box.append("A newer run replaced these clips, ", link, ".");
+}
+
 function renderClips(job) {
-  const m = job.manifest;
+  const m = job.superseded_by ? null : job.manifest;
   // only rebuild when the manifest actually changed, or every poll would restart the videos
   const key = JSON.stringify(m);
   if (key === shownManifest) return;
@@ -202,6 +229,7 @@ async function poll() {
   try {
     const job = await api(`/api/jobs/${encodeURIComponent(currentJob)}`);
     renderStatus(job);
+    renderNotice(job);
     renderClips(job);
     if (job.state === "queued" || job.state === "running") pollTimer = setTimeout(poll, 1000);
     else $("new-job").querySelector("button").disabled = false;
@@ -239,15 +267,14 @@ $("new-job").addEventListener("submit", async (ev) => {
   };
   const button = ev.target.querySelector("button");
   button.disabled = true;
+  $("form-error").textContent = "";
   try {
     const { id } = await api("/api/jobs", {
       method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body),
     });
     watch(id);
   } catch (e) {
-    $("status").hidden = false;
-    $("status-line").textContent = "";
-    $("error").textContent = e.message;
+    $("form-error").textContent = e.message;
     button.disabled = false;
   }
 });

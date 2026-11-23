@@ -136,6 +136,7 @@ def test_job_lifecycle_and_files(srv, video: Path):
     st = wait_done(srv, job_id)
     assert st["state"] == "done", st
     assert (st["stage"], st["fraction"]) == ("done", 1.0)
+    assert st["stages"] == ["audio", "render", "done"]
     assert st["log"] == ["reading audio"]
     assert [c["file"] for c in st["manifest"]["clips"]] == ["my clip_clip01.mp4", "my clip_clip02.mp4"]
 
