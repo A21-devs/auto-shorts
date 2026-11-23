@@ -121,6 +121,9 @@ def parse_job(body: dict[str, Any]) -> Job:
     captions = body.get("captions", True)
     if not isinstance(captions, bool):
         raise BadRequest("captions must be true or false")
+    jump = body.get("jumpcut", False)
+    if not isinstance(jump, bool):
+        raise BadRequest("jumpcut must be true or false")
     model = body.get("model", "small")
     if not isinstance(model, str) or not MODEL_NAME.fullmatch(model):
         raise BadRequest("model must be a whisper model name like small or large-v3")
@@ -131,7 +134,7 @@ def parse_job(body: dict[str, Any]) -> Job:
         source=src,
         out_dir=Path(out).expanduser().resolve() if out else src.with_name(f"{src.stem}_shorts"),
         clips=Options(count=int(count), min_len=min_len, max_len=max_len),
-        render=RenderOptions(layout=layout),
+        render=RenderOptions(layout=layout, jumpcut=jump),
         captions=captions,
         whisper_model=model,
     )

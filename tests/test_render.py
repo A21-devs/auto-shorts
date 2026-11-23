@@ -3,7 +3,14 @@
 import pytest
 
 from autoshorts.probe import MediaInfo
-from autoshorts.render import RenderOptions, build_command, gain_chain, parse_integrated, video_filter
+from autoshorts.render import (
+    RenderOptions,
+    build_command,
+    gain_chain,
+    jumpcut_filter,
+    parse_integrated,
+    video_filter,
+)
 
 INFO = MediaInfo(Path("in.mp4"), duration=600, width=1920, height=1080, fps=60, has_audio=True, video_stream=0)
 
@@ -66,3 +73,34 @@ def test_no_audio_means_no_audio_args():
     info = MediaInfo(Path("in.mp4"), 600, 1920, 1080, 30, False, 0)
     cmd = build_command(info, 0, 30, Path("o.mp4"), RenderOptions(encoder="libx264"))
     assert "-c:a" not in cmd and "0:a:0" not in cmd
+
+
+def test_jumpcut_filter_trims_and_joins_video_and_audio():
+    g = jumpcut_filter([(0.0, 4.1), (4.9, 10.0)], audio=True, gain="volume=2.00dB")
+    assert g.startswith("[0:v]split=2[s0][s1];[0:a:0]asplit=2[t0][t1];")
+    assert "[s1]trim=start=4.900:end=10.000,setpts=PTS-STARTPTS[v1]" in g
+    assert "[t1]atrim=start=4.900:end=10.000,asetpts=PTS-STARTPTS[a1]" in g
+    assert g.endswith("[v0][a0][v1][a1]concat=n=2:v=1:a=1[jv][ja];[ja]volume=2.00dB[aout]")
+
+
+def test_jumpcut_filter_without_audio():
+    g = jumpcut_filter([(0.0, 1.0), (2.0, 3.0)], audio=False, gain=None)
+    assert "asplit" not in g and g.endswith("[v0][v1]concat=n=2:v=1:a=0[jv]")
+
+
+def test_command_with_cuts_maps_the_joined_audio_and_moves_the_gain_into_the_graph():
+    info = MediaInfo(Path("in.mp4"), 600, 1920, 1080, 30, True, video_stream=2)
+    cmd = build_command(info, 100, 110, Path("o.mp4"), RenderOptions(encoder="libx264"), gain_db=3.0,
+                        keep=[(0.0, 4.1), (4.9, 10.0)])
+    graph = cmd[cmd.index("-filter_complex") + 1]
+    assert graph.startswith("[0:2]split=2")       # probed stream, not [0:v]
+    assert "[jv]split[a][b]" in graph              # the layout reads the joined video
+    assert "[0:v]" not in graph
+    assert "volume=3.00dB" in graph and "-af" not in cmd
+    assert cmd[cmd.index("[vout]") + 2] == "[aout]"
+
+
+def test_keeping_everything_renders_straight_through():
+    plain = build_command(INFO, 100, 110, Path("o.mp4"), RenderOptions(encoder="libx264"))
+    full = build_command(INFO, 100, 110, Path("o.mp4"), RenderOptions(encoder="libx264"), keep=[(0.0, 10.0)])
+    assert plain == full

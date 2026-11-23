@@ -24,6 +24,8 @@ def build_parser() -> argparse.ArgumentParser:
                    help="blur = video on a blurred background, crop = fill the frame, "
                         "follow = fill the frame and pan toward the action, fit = black bars")
     p.add_argument("--no-captions", action="store_true", help="skip transcription and captions")
+    p.add_argument("--jumpcut", action="store_true",
+                   help="cut out pauses longer than 0.5s inside each clip (captions are retimed to match)")
     p.add_argument("--model", default="small", help="whisper model size (tiny, base, small, medium, large-v3)")
     p.add_argument("--language", help="force a language code like en (default: auto detect)")
     p.add_argument("--encoder", default="auto", help="auto, h264_nvenc or libx264")
@@ -68,7 +70,7 @@ def main(argv: list[str] | None = None) -> int:
         source=args.video,
         out_dir=args.out or args.video.with_name(f"{args.video.stem}_shorts"),
         clips=Options(count=args.count, min_len=args.min_len, max_len=args.max_len),
-        render=RenderOptions(layout=args.layout, encoder=args.encoder),
+        render=RenderOptions(layout=args.layout, encoder=args.encoder, jumpcut=args.jumpcut),
         captions=not args.no_captions,
         whisper_model=args.model,
         language=args.language,

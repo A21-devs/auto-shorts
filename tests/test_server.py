@@ -88,6 +88,8 @@ def test_parse_job_defaults(video: Path):
     assert job.out_dir == video.resolve().with_name("my clip_shorts")
     assert (job.clips.count, job.clips.min_len, job.clips.max_len) == (6, 20, 55)
     assert job.render.layout == "blur" and job.captions and job.whisper_model == "small"
+    assert not job.render.jumpcut
+    assert parse_job({"video": str(video), "jumpcut": True}).render.jumpcut
 
 
 @pytest.mark.parametrize(("patch", "msg"), [
@@ -99,6 +101,7 @@ def test_parse_job_defaults(video: Path):
     ({"min": 30, "max": 20}, "max must be"),
     ({"layout": "stretch"}, "layout"),
     ({"captions": "yes"}, "captions"),
+    ({"jumpcut": 1}, "jumpcut"),
     ({"model": "../../evil"}, "model"),
     ({"out": 5}, "out"),
 ])

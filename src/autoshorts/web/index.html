@@ -89,6 +89,7 @@
       </select>
     </label>
     <label class="check"><input type="checkbox" name="captions" checked> Captions</label>
+    <label class="check"><input type="checkbox" name="jumpcut"> Cut pauses</label>
     <button class="primary" type="submit">Make shorts</button>
     <!-- separate from #error so the next status poll doesn't wipe it -->
     <div class="error" id="form-error" role="alert"></div>
@@ -345,6 +346,7 @@ $("new-job").addEventListener("submit", async (ev) => {
     layout: f.get("layout"),
     model: f.get("model"),
     captions: f.get("captions") === "on",
+    jumpcut: f.get("jumpcut") === "on",
   };
   const button = ev.target.querySelector("button");
   button.disabled = true;
