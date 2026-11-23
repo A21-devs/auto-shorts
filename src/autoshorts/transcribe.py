@@ -13,6 +13,9 @@ from pathlib import Path
 import numpy as np
 import numpy.typing as npt
 
+# whisper takes raw samples at 16 kHz, which is what audio.decode_pcm produces
+from .audio import SAMPLE_RATE
+
 
 @dataclass(frozen=True)
 class Word:
@@ -49,7 +52,6 @@ def _is_cuda_error(err: Exception) -> bool:
 
 
 Fraction = Callable[[float], None]
-SAMPLE_RATE = 16_000  # what audio.decode_pcm gives us, and what whisper expects
 
 
 def _run(audio: npt.NDArray[np.float32], model_size: str, device: str, language: str | None,
