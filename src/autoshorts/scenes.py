@@ -27,4 +27,7 @@ def detect_cuts(path: Path, video_stream: int = 0, threshold: float = 0.35, fps:
          "-an", "-vf", vf, "-f", "null", "-"],
         capture_output=True, text=True, errors="replace",
     )
+    if proc.returncode != 0:
+        tail = "\n".join(proc.stderr.strip().splitlines()[-5:])
+        raise RuntimeError(f"scene detection failed for {path.name}:\n{tail}")
     return parse_showinfo(proc.stderr)
