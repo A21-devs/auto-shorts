@@ -7,7 +7,8 @@ own machine, but it still refuses the two ways a web page could poke at it from 
 - the Host header must be localhost / 127.0.0.1, which stops DNS rebinding
 
 Endpoints:
-  GET  /api/jobs                       all jobs, newest first
+  GET  /                               the review page (web/index.html)
+  GET  /api/jobs                      all jobs, newest first
   POST /api/jobs                       {"video": path, ...options} -> {"id": ...}
   GET  /api/jobs/<id>                  state, stage, fraction, log tail, manifest or error
   GET  /api/jobs/<id>/files/<name>     a file from the job's output folder (Range supported)
@@ -35,6 +36,7 @@ from .pipeline import Job, run
 from .render import RenderOptions
 from .segment import Options
 
+PAGE = Path(__file__).with_name("web") / "index.html"
 MAX_BODY = 64 * 1024
 LOG_LINES = 200
 CHUNK = 256 * 1024
@@ -232,7 +234,9 @@ class Handler(BaseHTTPRequestHandler):
         # decode after splitting, so an encoded %2F stays inside one part (and gets rejected as a file name)
         parts = [unquote(p) for p in path.split("/") if p]
         try:
-            if method == "GET" and parts == ["api", "jobs"]:
+            if method == "GET" and parts in ([], ["index.html"]):
+                self._send_page()
+            elif method == "GET" and parts == ["api", "jobs"]:
                 jobs = sorted(self.app.jobs.values(), key=lambda s: s.created, reverse=True)
                 self._send_json(HTTPStatus.OK, [s.to_json(log_lines=0) for s in jobs])
             elif method == "POST" and parts == ["api", "jobs"]:
@@ -261,6 +265,19 @@ class Handler(BaseHTTPRequestHandler):
         self._dispatch("POST")
 
     # --- files ---
+
+    def _send_page(self) -> None:
+        body = PAGE.read_bytes()
+        self.send_response(HTTPStatus.OK)
+        self.send_header("Content-Type", "text/html; charset=utf-8")
+        self.send_header("Content-Length", str(len(body)))
+        self.send_header("Cache-Control", "no-cache")
+        # everything the page needs comes from here, and it never needs to be framed
+        self.send_header("Content-Security-Policy",
+                         "default-src 'self'; script-src 'self' 'unsafe-inline'; style-src 'self' 'unsafe-inline'; "
+                         "frame-ancestors 'none'")
+        self.end_headers()
+        self.wfile.write(body)
 
     def _send_file(self, st: JobState, name: str) -> None:
         # one plain file name inside the output folder, nothing else
