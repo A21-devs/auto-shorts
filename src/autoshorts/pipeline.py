@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import re
 import time
 from collections.abc import Callable
 from dataclasses import asdict, dataclass, field
@@ -38,6 +39,13 @@ def analyze(info: MediaInfo, job: Job, log: Log) -> tuple[segment.Signals, list[
         pcm = audio.decode_pcm(info.path)
         db = audio.loudness_curve(pcm, hop=job.hop)
         quiet = audio.silences(db, job.hop)
+        if len(db) and float(np.max(db)) <= audio.SILENCE_DB + 1.0:
+            # Roblox's recorder (and muted OBS tracks) write an audio stream of pure silence.
+            # Treat it as no audio, otherwise every window ties and it just picks the start.
+            log("audio track is silent, picking clips from scene changes only")
+            pcm = None
+            db = np.zeros(len(db))
+            quiet = []
     else:
         db = np.zeros(int(info.duration / job.hop))
         quiet = []
@@ -64,6 +72,18 @@ def analyze(info: MediaInfo, job: Job, log: Log) -> tuple[segment.Signals, list[
     return sig, words
 
 
+def remove_stale_clips(out_dir: Path, stem: str, keep: int) -> int:
+    """Deletes <stem>_clipNN.mp4/.ass with NN > keep. Only touches files that match our own naming."""
+    pattern = re.compile(re.escape(stem) + r"_clip(\d{2,})\.(mp4|ass)")
+    removed = 0
+    for f in out_dir.iterdir():
+        m = pattern.fullmatch(f.name)
+        if m and int(m.group(1)) > keep:
+            f.unlink()
+            removed += 1
+    return removed
+
+
 def run(job: Job, log: Log = print) -> Path:
     info = probe(job.source)
     log(f"{info.path.name}: {info.duration / 60:.1f} min, {info.width}x{info.height} @ {info.fps:.0f}fps")
@@ -75,6 +95,9 @@ def run(job: Job, log: Log = print) -> Path:
     out_dir = job.out_dir
     out_dir.mkdir(parents=True, exist_ok=True)
     stem = info.path.stem
+    removed = remove_stale_clips(out_dir, stem, keep=len(clips))
+    if removed:
+        log(f"removed {removed} clip file(s) left over from an earlier run")
     results = []
     for i, clip in enumerate(clips, 1):
         name = f"{stem}_clip{i:02d}.mp4"

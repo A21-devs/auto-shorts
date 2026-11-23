@@ -35,6 +35,9 @@ def main(argv: list[str] | None = None) -> int:
     if not args.video.is_file():
         print(f"error: {args.video} not found", file=sys.stderr)
         return 2
+    if args.count < 1:
+        print("error: --count must be at least 1", file=sys.stderr)
+        return 2
     if args.min_len <= 0 or args.max_len < args.min_len:
         print("error: --min must be > 0 and --max must be >= --min", file=sys.stderr)
         return 2
