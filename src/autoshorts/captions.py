@@ -61,7 +61,7 @@ def group_words(words: Sequence[Word], max_words: int, max_chars: int, max_gap: 
 
 
 def build_ass(words: Sequence[Word], clip_start: float, clip_end: float, style: CaptionStyle = CaptionStyle(),
-              width: int = 1080, height: int = 1920) -> str:
+              width: int = 1080, height: int = 1920, hold_gap: float = 0.6) -> str:
     """ASS document for the words inside [clip_start, clip_end], with times relative to the clip."""
     inside = [w for w in words if w.end > clip_start and w.start < clip_end]
     header = (
@@ -77,11 +77,19 @@ def build_ass(words: Sequence[Word], clip_start: float, clip_end: float, style: 
     )
     hi = _ass_color(style.highlight)
     lines: list[str] = []
-    for group in group_words(inside, style.max_words, style.max_chars):
+    groups = group_words(inside, style.max_words, style.max_chars, max_gap=hold_gap)
+    for g, group in enumerate(groups):
+        next_group_start = groups[g + 1][0].start if g + 1 < len(groups) else None
         for i, active in enumerate(group):
             start = max(active.start, clip_start) - clip_start
-            # stay on screen until the next word starts so text doesn't flicker between words
-            nxt = group[i + 1].start if i + 1 < len(group) else active.end
+            # stay on screen until the next word starts so text doesn't flicker between words,
+            # and between lines too unless there's a real pause
+            if i + 1 < len(group):
+                nxt = group[i + 1].start
+            elif next_group_start is not None and next_group_start - active.end < hold_gap:
+                nxt = next_group_start
+            else:
+                nxt = active.end
             end = min(max(nxt, active.end), clip_end) - clip_start
             if end <= start:
                 continue

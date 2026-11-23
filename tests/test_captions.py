@@ -40,6 +40,16 @@ def test_build_ass_is_relative_to_clip_and_highlights():
     assert "BEFORE" not in doc and "AFTER" not in doc
 
 
+def test_no_blank_flash_between_lines_but_real_pauses_clear():
+    ws = words((0.0, 0.3, "one"), (0.3, 0.6, "two"), (0.6, 0.9, "three"),   # line 1
+               (1.05, 1.4, "four"),                                         # 150 ms gap: hold
+               (3.0, 3.4, "five"))                                          # 1.6 s pause: clear
+    events = [line.split(",")[1:3] for line in build_ass(ws, 0, 10).splitlines() if line.startswith("Dialogue:")]
+    starts_ends = [(s, e) for s, e in events]
+    assert starts_ends[2] == ("0:00:00.60", "0:00:01.05")   # "three" held until "four" starts
+    assert starts_ends[3] == ("0:00:01.05", "0:00:01.40")   # "four" not held across the long pause
+
+
 def test_braces_in_words_cant_inject_ass_tags():
     doc = build_ass(words((0, 1, "{\\pos(0,0)}hi")), 0, 5)
     assert "{\\pos" not in doc
