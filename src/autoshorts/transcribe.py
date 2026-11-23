@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import functools
+import json
 import os
 import sys
 from collections.abc import Callable
@@ -87,6 +88,15 @@ def transcribe(
             raise
         log(f"GPU transcription unavailable ({err}), using CPU. `pip install autoshorts[gpu]` fixes this.")
         return _run(audio, model_size, "cpu", language)
+
+
+def save_words(words: list[Word], path: Path) -> None:
+    """[[start, end, text], ...] so captions can be rebuilt later without running whisper again."""
+    path.write_text(json.dumps([[w.start, w.end, w.text] for w in words], ensure_ascii=False), encoding="utf-8")
+
+
+def load_words(path: Path) -> list[Word]:
+    return [Word(float(a), float(b), str(t)) for a, b, t in json.loads(path.read_text(encoding="utf-8"))]
 
 
 def speech_density(words: list[Word], duration: float, hop: float) -> npt.NDArray[np.float64]:
