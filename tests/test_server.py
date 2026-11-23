@@ -1,5 +1,6 @@
 import http.client
 import json
+import socket
 import threading
 import time
 from collections.abc import Iterator
@@ -12,11 +13,15 @@ from autoshorts import server
 from autoshorts.pipeline import Job
 from autoshorts.server import App, BadRequest, make_server, parse_job, parse_range
 
+release = threading.Event()
+
 
 def fake_run(job: Job, log, progress) -> Path:
     """Stands in for the real pipeline: two fake clips and a manifest, with progress along the way."""
     if job.source.name == "broken.mp4":
         raise RuntimeError("ffmpeg could not read the audio")
+    if job.source.name == "slow.mp4":
+        release.wait(5)
     log("reading audio")
     progress("audio", 1.0)
     job.out_dir.mkdir(parents=True, exist_ok=True)
@@ -184,6 +189,45 @@ def test_post_needs_json_content_type(srv, video: Path):
 @pytest.mark.parametrize(("body", "status"), [(b"{not json", 400), (b"[1, 2]", 400), (b"x" * 70_000, 413)])
 def test_bad_bodies(srv, body: bytes, status: int):
     assert request(srv, "POST", "/api/jobs", body)[0] == status
+
+
+def test_negative_content_length_is_400_not_a_hang(srv):
+    with socket.create_connection(srv, timeout=3) as c:
+        c.sendall(b"POST /api/jobs HTTP/1.1\r\nHost: 127.0.0.1\r\nContent-Type: application/json\r\n"
+                  b"Content-Length: -1\r\n\r\n{}")
+        assert c.recv(64).startswith(b"HTTP/1.0 400")
+
+
+def test_one_active_job_per_output_folder(srv, tmp_path: Path):
+    slow = tmp_path / "slow.mp4"
+    slow.write_bytes(b"x")
+    release.clear()
+    try:
+        status, _, body = request(srv, "POST", "/api/jobs", {"video": str(slow)})
+        first = json.loads(body)["id"]
+        status, _, body = request(srv, "POST", "/api/jobs", {"video": str(slow), "count": 3})
+        assert status == 409 and first in json.loads(body)["error"]
+        # a different folder is fine
+        status, _, _ = request(srv, "POST", "/api/jobs", {"video": str(slow), "out": str(tmp_path / "other")})
+        assert status == 201
+    finally:
+        release.set()
+    assert wait_done(srv, first)["state"] == "done"
+
+    # once it's finished, a new run may reuse the folder, and the old job says it was replaced
+    status, _, body = request(srv, "POST", "/api/jobs", {"video": str(slow)})
+    assert status == 201
+    second = json.loads(body)["id"]
+    _, _, body = request(srv, "GET", f"/api/jobs/{first}")
+    assert json.loads(body)["superseded_by"] == second
+    wait_done(srv, second)
+
+
+def test_job_list_has_no_logs(srv, video: Path):
+    _, _, body = request(srv, "POST", "/api/jobs", {"video": str(video)})
+    wait_done(srv, json.loads(body)["id"])
+    _, _, body = request(srv, "GET", "/api/jobs")
+    assert json.loads(body)[0]["log"] == []
 
 
 def test_bad_job_options_are_400(srv):

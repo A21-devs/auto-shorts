@@ -46,6 +46,10 @@ class BadRequest(ValueError):
     pass
 
 
+class FolderBusy(RuntimeError):
+    pass
+
+
 @dataclass
 class JobState:
     id: str
@@ -58,6 +62,7 @@ class JobState:
     fraction: float = 0.0
     error: str | None = None
     manifest: dict[str, Any] | None = None
+    superseded_by: str | None = None  # a later job that wrote to the same folder
     log: deque[str] = field(default_factory=lambda: deque(maxlen=LOG_LINES))
     lock: threading.Lock = field(default_factory=threading.Lock)
 
@@ -71,7 +76,8 @@ class JobState:
         return {
             "id": self.id, "video": str(self.video), "out_dir": str(self.out_dir), "created": self.created,
             "state": self.state, "stage": self.stage, "fraction": round(self.fraction, 4),
-            "error": self.error, "log": list(self.log)[-log_lines:], "manifest": self.manifest,
+            "error": self.error, "log": list(self.log)[-log_lines:] if log_lines else [],
+            "manifest": self.manifest, "superseded_by": self.superseded_by,
         }
 
 
@@ -126,13 +132,24 @@ class App:
 
     def __init__(self) -> None:
         self.jobs: dict[str, JobState] = {}
+        self._lock = threading.Lock()  # submit() runs on request threads
         self._queue: queue.Queue[JobState] = queue.Queue()
         self._worker = threading.Thread(target=self._work, name="autoshorts-worker", daemon=True)
         self._worker.start()
 
     def submit(self, job: Job) -> JobState:
-        st = JobState(id=uuid.uuid4().hex[:12], video=job.source, out_dir=job.out_dir, job=job)
-        self.jobs[st.id] = st
+        """Queues a job. Raises FolderBusy if a queued or running job already writes to the same folder.
+        Finished jobs in that folder get `superseded_by`, since the new run will overwrite their clips."""
+        folder = job.out_dir.resolve()
+        with self._lock:
+            same = [s for s in self.jobs.values() if s.out_dir.resolve() == folder]
+            busy = next((s for s in same if s.state in ("queued", "running")), None)
+            if busy:
+                raise FolderBusy(f"job {busy.id} is still writing to {folder}")
+            st = JobState(id=uuid.uuid4().hex[:12], video=job.source, out_dir=job.out_dir, job=job)
+            for old in same:
+                old.superseded_by = st.id
+            self.jobs[st.id] = st
         self._queue.put(st)
         return st
 
@@ -186,6 +203,9 @@ class Handler(BaseHTTPRequestHandler):
             length = int(self.headers.get("Content-Length") or 0)
         except ValueError:
             raise _HttpError(HTTPStatus.BAD_REQUEST, "bad Content-Length") from None
+        if length < 0:
+            # rfile.read(-1) would wait for the client to close the connection
+            raise _HttpError(HTTPStatus.BAD_REQUEST, "bad Content-Length")
         if length > MAX_BODY:
             raise _HttpError(HTTPStatus.REQUEST_ENTITY_TOO_LARGE, "request body too large")
         try:
@@ -220,7 +240,10 @@ class Handler(BaseHTTPRequestHandler):
                     job = parse_job(self._read_json())
                 except BadRequest as e:
                     raise _HttpError(HTTPStatus.BAD_REQUEST, str(e)) from None
-                st = self.app.submit(job)
+                try:
+                    st = self.app.submit(job)
+                except FolderBusy as e:
+                    raise _HttpError(HTTPStatus.CONFLICT, str(e)) from None
                 self._send_json(HTTPStatus.CREATED, {"id": st.id})
             elif method == "GET" and len(parts) == 3 and parts[:2] == ["api", "jobs"]:
                 self._send_json(HTTPStatus.OK, self._job(parts[2]).to_json())
