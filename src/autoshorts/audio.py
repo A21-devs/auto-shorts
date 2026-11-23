@@ -25,8 +25,11 @@ def decode_pcm(path: Path, sample_rate: int = SAMPLE_RATE) -> npt.NDArray[np.flo
     proc = subprocess.run(
         [require("ffmpeg"), "-v", "error", "-i", str(path), "-map", "0:a:0", "-vn",
          "-ac", "1", "-ar", str(sample_rate), "-f", "s16le", "-"],
-        capture_output=True, check=True,
+        capture_output=True,
     )
+    if proc.returncode != 0:
+        tail = "\n".join(proc.stderr.decode(errors="replace").strip().splitlines()[-5:])
+        raise RuntimeError(f"ffmpeg could not read the audio of {path.name}:\n{tail}")
     pcm = np.frombuffer(proc.stdout, dtype=np.int16)
     return (pcm.astype(np.float32) / 32768.0)
 
@@ -52,10 +55,23 @@ def zscore(x: FloatArray) -> FloatArray:
     return (x - float(np.mean(x))) / std if std > 1e-9 else np.zeros_like(x)
 
 
+def quiet_threshold(db: FloatArray, floor_db: float = -40.0, percentile: float = 10.0) -> float:
+    """What counts as "quiet" for this video.
+
+    Real silence (-40 dB) when the video has it. Gameplay with constant music never gets that
+    quiet, so fall back to its own quietest 10% so there are still cut points.
+    """
+    if len(db) == 0 or bool(np.any(db < floor_db)):
+        return floor_db
+    return float(np.percentile(db, percentile))
+
+
 def silences(
-    db: FloatArray, hop: float, threshold_db: float = -40.0, min_len: float = 0.4
+    db: FloatArray, hop: float, threshold_db: float | None = None, min_len: float = 0.4
 ) -> list[tuple[float, float]]:
-    """Stretches quieter than threshold_db lasting at least min_len seconds, as (start, end)."""
+    """Stretches quieter than threshold_db (default: quiet_threshold) lasting min_len+ seconds, as (start, end)."""
+    if threshold_db is None:
+        threshold_db = quiet_threshold(db)
     out: list[tuple[float, float]] = []
     start: int | None = None
     for i, v in enumerate(db):
