@@ -263,3 +263,141 @@ def test_review_page(srv):
     assert b"/api/jobs" in body
     assert request(srv, "GET", "/index.html")[0] == 200
     assert request(srv, "GET", "/", headers={"Host": "evil.example"})[0] == 403
+
+
+# --- clip edits ---
+
+def finished_job(srv, video: Path) -> str:
+    _, _, body = request(srv, "POST", "/api/jobs", {"video": str(video)})
+    job_id: str = json.loads(body)["id"]
+    assert wait_done(srv, job_id)["state"] == "done"
+    return job_id
+
+
+def test_keep_and_drop_are_saved(srv, video: Path):
+    job_id = finished_job(srv, video)
+    status, _, body = request(srv, "POST", f"/api/jobs/{job_id}/clips/2", {"keep": False})
+    assert status == 200
+    assert json.loads(body)["manifest"]["clips"][1]["keep"] is False
+    on_disk = json.loads((video.parent / "my clip_shorts" / "manifest.json").read_text())
+    assert [c.get("keep") for c in on_disk["clips"]] == [None, False]
+
+    request(srv, "POST", f"/api/jobs/{job_id}/clips/2", {"keep": None})
+    _, _, body = request(srv, "GET", f"/api/jobs/{job_id}")
+    assert json.loads(body)["manifest"]["clips"][1]["keep"] is None
+
+
+def test_quick_keep_clicks_on_two_clips_both_save(srv, video: Path):
+    # found in a real run: Keep on clip 1 then Drop on clip 2 right after gave a 409 for the second
+    job_id = finished_job(srv, video)
+    results: list[int] = []
+    threads = [threading.Thread(target=lambda n=n, k=k: results.append(
+        request(srv, "POST", f"/api/jobs/{job_id}/clips/{n}", {"keep": k})[0])) for n, k in ((1, True), (2, False))]
+    for t in threads:
+        t.start()
+    for t in threads:
+        t.join(5)
+    assert results == [200, 200]
+    _, _, body = request(srv, "GET", f"/api/jobs/{job_id}")
+    assert [c["keep"] for c in json.loads(body)["manifest"]["clips"]] == [True, False]
+
+
+def test_rerender_goes_through_rerender_clip(srv, video: Path, monkeypatch: pytest.MonkeyPatch):
+    job_id = finished_job(srv, video)
+    calls = []
+
+    def fake_rerender(manifest: Path, n: int, start: float, end: float, log) -> dict[str, Any]:
+        calls.append((manifest.name, n, start, end))
+        log("re-rendering")
+        data = json.loads(manifest.read_text())
+        data["clips"][n - 1].update(start=start, end=end, edited=True)
+        manifest.write_text(json.dumps(data))
+        return dict(data["clips"][n - 1])
+
+    monkeypatch.setattr(server, "rerender_clip", fake_rerender)
+    status, _, body = request(srv, "POST", f"/api/jobs/{job_id}/clips/1", {"start": 8, "end": 16.5})
+    assert status == 200, body
+    assert calls == [("manifest.json", 1, 8, 16.5)]
+    st = json.loads(body)
+    assert st["manifest"]["clips"][0]["end"] == 16.5 and st["log"][-1] == "re-rendering"
+
+
+@pytest.mark.parametrize(("path", "body", "status", "msg"), [
+    ("clips/1", {"keep": "yes"}, 400, "keep must be"),
+    ("clips/1", {"start": 1}, 400, "send"),
+    ("clips/1", {"start": "1", "end": 5}, 400, "numbers"),
+    ("clips/1", {"start": True, "end": 5}, 400, "numbers"),
+    ("clips/9", {"keep": True}, 400, "doesn't exist"),
+    ("clips/x", {"keep": True}, 404, "no such clip"),
+    ("clips/0", {"keep": True}, 400, "doesn't exist"),
+])
+def test_bad_edits(srv, video: Path, path: str, body: dict[str, Any], status: int, msg: str):
+    job_id = finished_job(srv, video)
+    got, _, data = request(srv, "POST", f"/api/jobs/{job_id}/{path}", body)
+    assert got == status and msg in json.loads(data)["error"]
+
+
+def test_nan_times_are_rejected(srv, video: Path):
+    job_id = finished_job(srv, video)
+    status, _, _ = request(srv, "POST", f"/api/jobs/{job_id}/clips/1", b'{"start": NaN, "end": 5}')
+    assert status == 400
+
+
+def test_failed_rerender_is_500_and_logged(srv, video: Path, monkeypatch: pytest.MonkeyPatch):
+    job_id = finished_job(srv, video)
+
+    def broken(*_a, **_kw):
+        raise RuntimeError("ffmpeg failed for my clip_clip01.mp4")
+
+    monkeypatch.setattr(server, "rerender_clip", broken)
+    status, _, body = request(srv, "POST", f"/api/jobs/{job_id}/clips/1", {"start": 1, "end": 9})
+    assert status == 500 and "ffmpeg failed" in json.loads(body)["error"]
+    _, _, body = request(srv, "GET", f"/api/jobs/{job_id}")
+    assert "edit failed: ffmpeg failed" in json.loads(body)["log"][-1]
+    # the lock was released, the next edit works
+    assert request(srv, "POST", f"/api/jobs/{job_id}/clips/1", {"keep": True})[0] == 200
+
+
+def test_edits_need_a_finished_current_job(srv, tmp_path: Path):
+    slow = tmp_path / "slow.mp4"
+    slow.write_bytes(b"x")
+    release.clear()
+    try:
+        _, _, body = request(srv, "POST", "/api/jobs", {"video": str(slow)})
+        first = json.loads(body)["id"]
+        status, _, body = request(srv, "POST", f"/api/jobs/{first}/clips/1", {"keep": True})
+        assert status == 409 and "isn't finished" in json.loads(body)["error"]
+    finally:
+        release.set()
+    wait_done(srv, first)
+    _, _, body = request(srv, "POST", "/api/jobs", {"video": str(slow)})
+    wait_done(srv, json.loads(body)["id"])
+    status, _, body = request(srv, "POST", f"/api/jobs/{first}/clips/1", {"keep": True})
+    assert status == 409 and "replaced" in json.loads(body)["error"]
+
+
+def test_one_edit_at_a_time(srv, video: Path, monkeypatch: pytest.MonkeyPatch):
+    job_id = finished_job(srv, video)
+    started, finish = threading.Event(), threading.Event()
+
+    def slow_rerender(manifest: Path, n: int, start: float, end: float, log) -> dict[str, Any]:
+        started.set()
+        finish.wait(5)
+        return {}
+
+    monkeypatch.setattr(server, "rerender_clip", slow_rerender)
+    results: list[int] = []
+    t = threading.Thread(target=lambda: results.append(
+        request(srv, "POST", f"/api/jobs/{job_id}/clips/1", {"start": 1, "end": 9})[0]))
+    t.start()
+    assert started.wait(5)
+    try:
+        status, _, body = request(srv, "POST", f"/api/jobs/{job_id}/clips/2", {"keep": True})
+        assert status == 409 and "busy" in json.loads(body)["error"]
+        # and no new run may start writing into the folder mid-render either
+        status, _, _ = request(srv, "POST", "/api/jobs", {"video": str(video)})
+        assert status == 409
+    finally:
+        finish.set()
+        t.join(5)
+    assert results == [200]

@@ -129,3 +129,12 @@ def test_rerender_real_clip_with_captions(tmp_path: Path):
     assert abs(clip.duration - 12.0) < 0.2
     assert "NUDGED" in (out / entry["subtitles"]).read_text(encoding="utf-8")
     assert not list(out.glob("*.tmp*"))
+
+
+def test_mark_clip(tmp_path: Path):
+    manifest = fake_run(tmp_path)
+    assert pipeline.mark_clip(manifest, 2, True)["keep"] is True
+    assert pipeline.mark_clip(manifest, 2, None)["keep"] is None
+    assert [c.get("keep", "unset") for c in json.loads(manifest.read_text())["clips"]] == ["unset", None]
+    with pytest.raises(ValueError, match="doesn't exist"):
+        pipeline.mark_clip(manifest, 3, True)

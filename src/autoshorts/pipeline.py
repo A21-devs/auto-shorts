@@ -208,3 +208,14 @@ def rerender_clip(manifest: Path, n: int, start: float, end: float, log: Log = p
     entry.update(start=round(start, 2), end=round(end, 2), edited=True)
     _write_manifest(manifest, data)
     return dict(entry)
+
+
+def mark_clip(manifest: Path, n: int, keep: bool | None) -> dict[str, Any]:
+    """Records a keep (True) / drop (False) / undecided (None) choice for clip n in manifest.json."""
+    data = json.loads(manifest.read_text(encoding="utf-8"))
+    clips = data["clips"]
+    if not 1 <= n <= len(clips):
+        raise ValueError(f"clip {n} doesn't exist, this run has {len(clips)}")
+    clips[n - 1]["keep"] = keep
+    _write_manifest(manifest, data)
+    return dict(clips[n - 1])
