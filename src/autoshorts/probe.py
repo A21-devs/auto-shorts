@@ -1,4 +1,4 @@
-"""Thin wrappers around ffprobe / ffmpeg."""
+﻿"""Thin wrappers around ffprobe / ffmpeg."""
 
 from __future__ import annotations
 
@@ -7,6 +7,7 @@ import shutil
 import subprocess
 from dataclasses import dataclass
 from pathlib import Path
+from typing import Any
 
 
 class ToolMissing(RuntimeError):
@@ -39,21 +40,37 @@ def _fps(rate: str) -> float:
         return 30.0
 
 
+_IMAGE_CODECS = {"mjpeg", "png", "bmp", "gif", "webp", "tiff"}
+
+
+def _video_rank(s: dict[str, Any]) -> tuple[int, int]:
+    """Higher is better. Real video beats thumbnails, then bigger beats smaller.
+
+    Roblox and some phone recordings store a 1-frame JPEG thumbnail as a normal video stream
+    (no attached_pic flag) that's bigger than the actual video, so resolution alone picks it.
+    """
+    is_picture = (
+        bool(s.get("disposition", {}).get("attached_pic"))
+        or s.get("codec_name") in _IMAGE_CODECS
+        # exactly one frame = still image. "0" just means ffprobe doesn't know (fragmented MP4).
+        or str(s.get("nb_frames", "")) == "1"
+    )
+    return (0 if is_picture else 1, int(s.get("width", 0)) * int(s.get("height", 0)))
+
+
 def probe(path: Path) -> MediaInfo:
     out = subprocess.run(
         [require("ffprobe"), "-v", "error", "-show_entries",
-         "format=duration:stream=index,codec_type,width,height,avg_frame_rate,disposition",
+         "format=duration:stream=index,codec_type,codec_name,width,height,avg_frame_rate,nb_frames,disposition",
          "-of", "json", str(path)],
         capture_output=True, text=True, check=True,
     )
     data = json.loads(out.stdout)
     streams = data.get("streams", [])
-    # OBS / Roblox recordings sometimes have a cover-art stream, skip attached pictures
-    videos = [s for s in streams if s.get("codec_type") == "video"
-              and not s.get("disposition", {}).get("attached_pic")]
+    videos = [s for s in streams if s.get("codec_type") == "video"]
     if not videos:
         raise ValueError(f"{path.name} has no video stream")
-    v = max(videos, key=lambda s: int(s.get("width", 0)) * int(s.get("height", 0)))
+    v = max(videos, key=_video_rank)
     return MediaInfo(
         path=path,
         duration=float(data["format"]["duration"]),
