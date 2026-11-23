@@ -62,6 +62,19 @@ def test_one_odd_window_does_not_start_a_pan():
     assert all(c == pytest.approx(0.3) for _, c in keys)
 
 
+def test_a_pan_recentres_instead_of_stopping_at_the_dead_zone_edge():
+    keys = camera_path(_f(*([0.3] * 3 + [0.6] * 10)), 1.0, window=0.316)
+    assert keys[0][1] == pytest.approx(0.3)
+    # old behaviour parked at 0.6 - 0.316 / 4 = 0.521
+    assert keys[-1][1] > 0.6 - 0.316 / 16 - 1e-6
+
+
+def test_start_position_is_a_real_focus_value_not_a_blend():
+    # windows 0 and 2 agree, window 1 is an outlier: start on 0.9, not on mean(0.9, 0.54) = 0.72
+    keys = camera_path(_f(0.9, 0.54, 0.9, 0.9), 1.0, window=0.316)
+    assert keys[0][1] == pytest.approx(1 - 0.316 / 2)
+
+
 def test_simplify_drops_points_on_a_line():
     keys = [(0.0, 0.5), (1.0, 0.5), (2.0, 0.5), (3.0, 0.6), (4.0, 0.7), (5.0, 0.7)]
     assert simplify(keys) == [(0.0, 0.5), (2.0, 0.5), (4.0, 0.7), (5.0, 0.7)]

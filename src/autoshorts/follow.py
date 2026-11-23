@@ -1,8 +1,9 @@
 """Camera path for `--layout follow`: a 9:16 crop window that pans toward the action.
 
 The path is a list of keyframes (time, centre) with the centre as a fraction of the scaled
-source width. It moves only when the action leaves the middle half of the crop, and never faster
-than `max_speed` widths per second, so it reads as a slow camera move rather than jitter.
+source width. It starts moving only when the action leaves the middle half of the crop, then
+re-centres on it, never faster than `max_speed` widths per second, so it reads as a slow camera
+move rather than jitter.
 """
 
 from __future__ import annotations
@@ -30,21 +31,33 @@ def camera_path(focus: FloatArray, step: float, window: float, max_speed: float 
     first = next((float(v) for v in targets if not math.isnan(v)), 0.5)
     cur = reachable(first)
     keys: Keyframes = [(0.0, cur)]
+    moving = False
+    limit = max_speed * step
     for i, v in enumerate(targets):
         target = cur if math.isnan(v) else reachable(float(v))
-        # dead zone: as long as the action is inside the middle half of the crop, hold still
-        if abs(target - cur) > window / 4:
-            limit = max_speed * step
+        # dead zone with hysteresis: hold still while the action is inside the middle half of the
+        # crop, but once a pan starts, keep going until the action is close to the centre again
+        # (stopping at the dead zone edge would park every subject a quarter crop off-centre)
+        if not moving and abs(target - cur) > window / 4:
+            moving = True
+        if moving:
             cur += max(-limit, min(limit, target - cur))
+            if abs(target - cur) <= window / 16:
+                moving = False
         keys.append(((i + 0.5) * step, cur))
     return simplify(keys)
 
 
 def smooth(focus: FloatArray) -> list[float]:
-    """Median of each window and its neighbours (ignoring NaN), so one odd window doesn't start a pan."""
+    """Median of each window and its neighbours (ignoring NaN), so one odd window doesn't start a pan.
+
+    At the ends the 3-window span shifts inward instead of shrinking: the median of 2 values is
+    their mean, which would start the clip halfway between two spots."""
     out: list[float] = []
-    for i in range(len(focus)):
-        near = [float(v) for v in focus[max(0, i - 1):i + 2] if not math.isnan(v)]
+    n = len(focus)
+    for i in range(n):
+        lo = max(0, min(i - 1, n - 3))
+        near = [float(v) for v in focus[lo:lo + 3] if not math.isnan(v)]
         out.append(float(np.median(near)) if near and not math.isnan(focus[i]) else math.nan)
     return out
 
