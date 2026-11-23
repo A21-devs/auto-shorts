@@ -3,11 +3,13 @@
 from __future__ import annotations
 
 import json
+import os
 import re
 import time
 from collections.abc import Callable
-from dataclasses import asdict, dataclass, field
+from dataclasses import asdict, dataclass, field, fields
 from pathlib import Path
+from typing import Any
 
 import numpy as np
 
@@ -17,6 +19,8 @@ from .probe import MediaInfo, probe
 from .render import RenderOptions, render
 
 Log = Callable[[str], None]
+
+MIN_CLIP = 1.0  # shortest range rerender_clip accepts, in seconds
 
 
 @dataclass
@@ -84,6 +88,25 @@ def remove_stale_clips(out_dir: Path, stem: str, keep: int) -> int:
     return removed
 
 
+def _render_one(info: MediaInfo, words: list[transcribe.Word], start: float, end: float, out_dir: Path,
+                base: str, opts: RenderOptions, suffix: str = "") -> tuple[str, str | None]:
+    """Writes <base><suffix>.ass (if there are words) and renders <base><suffix>.mp4. Returns both names."""
+    name = f"{base}{suffix}.mp4"
+    sub = None
+    if words:
+        sub = f"{base}{suffix}.ass"
+        (out_dir / sub).write_text(build_ass(words, start, end, CaptionStyle()), encoding="utf-8")
+    render(info, start, end, out_dir / name, opts, sub, workdir=out_dir)
+    return name, sub
+
+
+def _write_manifest(path: Path, data: dict[str, Any]) -> None:
+    # write then rename, so a reader (the review page) never sees half a file
+    tmp = path.with_name(path.name + ".tmp")
+    tmp.write_text(json.dumps(data, indent=2), encoding="utf-8")
+    os.replace(tmp, path)
+
+
 def run(job: Job, log: Log = print) -> Path:
     info = probe(job.source)
     log(f"{info.path.name}: {info.duration / 60:.1f} min, {info.width}x{info.height} @ {info.fps:.0f}fps")
@@ -98,21 +121,72 @@ def run(job: Job, log: Log = print) -> Path:
     removed = remove_stale_clips(out_dir, stem, keep=len(clips))
     if removed:
         log(f"removed {removed} clip file(s) left over from an earlier run")
+    words_file = None
+    if words:
+        words_file = f"{stem}_words.json"
+        transcribe.save_words(words, out_dir / words_file)
     results = []
     for i, clip in enumerate(clips, 1):
-        name = f"{stem}_clip{i:02d}.mp4"
-        sub = None
-        if words:
-            sub = f"{stem}_clip{i:02d}.ass"
-            (out_dir / sub).write_text(build_ass(words, clip.start, clip.end, CaptionStyle()), encoding="utf-8")
         why = ", ".join(clip.reasons)
         log(f"[{i}/{len(clips)}] {clip.start:7.1f}s - {clip.end:7.1f}s  score {clip.score:5.2f}  {why}")
         t = time.perf_counter()
-        render(info, clip.start, clip.end, out_dir / name, job.render, sub, workdir=out_dir)
+        name, sub = _render_one(info, words, clip.start, clip.end, out_dir, f"{stem}_clip{i:02d}", job.render)
         log(f"         rendered {name} in {time.perf_counter() - t:.1f}s")
         results.append({**asdict(clip), "file": name, "subtitles": sub})
 
     manifest = out_dir / "manifest.json"
-    manifest.write_text(json.dumps({"source": str(info.path), "duration": info.duration, "clips": results}, indent=2),
-                        encoding="utf-8")
+    _write_manifest(manifest, {"source": str(info.path), "duration": info.duration, "render": asdict(job.render),
+                               "words": words_file, "clips": results})
     return manifest
+
+
+def _render_options(saved: dict[str, Any] | None) -> RenderOptions:
+    """RenderOptions from a manifest. Older manifests don't have them, unknown keys are ignored."""
+    known = {f.name for f in fields(RenderOptions)}
+    return RenderOptions(**{k: v for k, v in (saved or {}).items() if k in known})
+
+
+def rerender_clip(manifest: Path, n: int, start: float, end: float, log: Log = print) -> dict[str, Any]:
+    """Re-renders clip number n (1-based) of a finished run over [start, end] and updates manifest.json.
+
+    Renders to a temp name first and swaps it in at the end, so a failed render leaves the old clip
+    (and its captions) as they were.
+    """
+    data = json.loads(manifest.read_text(encoding="utf-8"))
+    clips = data["clips"]
+    if not 1 <= n <= len(clips):
+        raise ValueError(f"clip {n} doesn't exist, this run has {len(clips)}")
+    start, end = max(0.0, float(start)), min(float(data["duration"]), float(end))
+    if end - start < MIN_CLIP:
+        raise ValueError(f"clip must be at least {MIN_CLIP:g}s long (got {start:.2f}s - {end:.2f}s)")
+
+    out_dir = manifest.parent
+    entry = clips[n - 1]
+    base = Path(entry["file"]).stem
+    words: list[transcribe.Word] = []
+    if data.get("words"):
+        try:
+            words = transcribe.load_words(out_dir / data["words"])
+        except (OSError, ValueError, TypeError) as e:
+            log(f"can't read the transcript ({e}), re-rendering without captions")
+    info = probe(Path(data["source"]))
+    log(f"re-rendering {entry['file']}: {start:.1f}s - {end:.1f}s")
+    try:
+        tmp_name, tmp_sub = _render_one(info, words, start, end, out_dir, base,
+                                        _render_options(data.get("render")), suffix=".tmp")
+    except BaseException:
+        for leftover in (f"{base}.tmp.mp4", f"{base}.tmp.ass"):
+            (out_dir / leftover).unlink(missing_ok=True)
+        raise
+    os.replace(out_dir / tmp_name, out_dir / entry["file"])
+    if tmp_sub:
+        sub = f"{base}.ass"
+        os.replace(out_dir / tmp_sub, out_dir / sub)
+        entry["subtitles"] = sub
+    elif entry.get("subtitles"):
+        # the old captions are for the old range, don't leave them looking like they belong to this clip
+        (out_dir / Path(entry["subtitles"]).name).unlink(missing_ok=True)
+        entry["subtitles"] = None
+    entry.update(start=round(start, 2), end=round(end, 2), edited=True)
+    _write_manifest(manifest, data)
+    return dict(entry)
