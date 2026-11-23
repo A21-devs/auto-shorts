@@ -26,3 +26,8 @@ def test_stale_clips_removed_but_nothing_else(tmp_path: Path):
     left = sorted(p.name for p in tmp_path.iterdir())
     assert left == ["notes.txt", "other_clip09.mp4", "vod_clip01.ass", "vod_clip01.mp4", "vod_clip02.mp4",
                     "vod_clip05_edit.mp4"]
+
+
+def test_serve_rejects_bad_port(capsys):
+    assert main(["serve", "--port", "70000"]) == 2
+    assert "--port" in capsys.readouterr().err
