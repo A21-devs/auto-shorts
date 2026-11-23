@@ -1,4 +1,4 @@
-"""Picks the best clip windows from per-second signals.
+﻿"""Picks the best clip windows from per-second signals.
 
 Everything here is pure (numbers in, numbers out) so it's easy to test.
 
@@ -14,6 +14,7 @@ sentence ends so they don't start or stop mid-word, and picked greedily without 
 
 from __future__ import annotations
 
+from bisect import bisect_left
 from dataclasses import dataclass, field
 
 import numpy as np
@@ -46,6 +47,11 @@ class Signals:
     def duration(self) -> float:
         return len(self.loudness) * self.hop
 
+    def __post_init__(self) -> None:
+        # the scoring uses bisect on these, so they have to be sorted
+        object.__setattr__(self, "cuts", tuple(sorted(self.cuts)))
+        object.__setattr__(self, "boundaries", tuple(sorted(self.boundaries)))
+
 
 @dataclass(frozen=True)
 class Options:
@@ -76,7 +82,7 @@ def _window_score(sig: Signals, a: int, b: int, hook: int) -> tuple[float, list[
         if talk > 1.5:
             reasons.append("lots of talking")
     t0, t1 = a * sig.hop, b * sig.hop
-    n_cuts = sum(1 for c in sig.cuts if t0 <= c < t1)
+    n_cuts = bisect_left(sig.cuts, t1) - bisect_left(sig.cuts, t0)
     if n_cuts:
         # some cuts = action, a ton of cuts = menu flicker / loading screens
         per_min = n_cuts / ((t1 - t0) / 60)
@@ -87,9 +93,10 @@ def _window_score(sig: Signals, a: int, b: int, hook: int) -> tuple[float, list[
 
 
 def _snap(t: float, points: tuple[float, ...], limit: float) -> float:
-    best = t
-    dist = limit
-    for p in points:
+    """Nearest point within `limit` of t (points must be sorted), or t itself."""
+    i = bisect_left(points, t)
+    best, dist = t, limit
+    for p in points[max(0, i - 1): i + 1]:
         d = abs(p - t)
         if d <= dist:
             best, dist = p, d

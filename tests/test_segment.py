@@ -62,3 +62,9 @@ def test_talking_beats_silence():
     clips = find_clips(Signals(0.5, loud, speech=speech), Options(count=1, min_len=20, max_len=30))
     assert clips[0].start == pytest.approx(50, abs=12)
     assert "lots of talking" in clips[0].reasons
+
+
+def test_unsorted_inputs_are_sorted():
+    sig = Signals(0.5, flat(100), cuts=(30.0, 10.0, 20.0), boundaries=(50.0, 5.0))
+    assert sig.cuts == (10.0, 20.0, 30.0) and sig.boundaries == (5.0, 50.0)
+
