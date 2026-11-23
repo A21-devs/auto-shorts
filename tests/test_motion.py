@@ -78,3 +78,45 @@ def test_read_motion_finds_a_box_moving_on_the_right(tmp_path: Path):
     part = read_motion(src, 0, 320, 180, start=1.0, duration=2.0, fps=5)
     assert part.columns.shape[0] == 10
     assert read_motion(src, 0, 320, 180, start=10.0, fps=5).columns.shape == (0, 96)
+
+
+def test_placeholder_row_does_not_hide_the_first_window():
+    # real motion mean is 1.2 (just over STILL). Averaging in the zero row 0 would make it 0.96
+    row = [0.0] * 10
+    row[2] = 12.0
+    f = focus(_motion([[0.0] * 10] + [row] * 9))
+    assert f[0] == pytest.approx(0.25)
+
+
+@pytest.mark.ffmpeg
+@pytest.mark.skipif(not shutil.which("ffmpeg"), reason="needs ffmpeg")
+def test_ffmpeg_is_killed_when_reading_fails(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
+    src = tmp_path / "long.mp4"
+    subprocess.run(["ffmpeg", "-v", "error", "-y", "-f", "lavfi", "-i", "testsrc2=s=320x180:r=30:d=60",
+                    "-c:v", "libx264", "-preset", "ultrafast", str(src)], check=True)
+    import autoshorts.motion as motion
+
+    started: list[subprocess.Popen[bytes]] = []
+    real_popen = subprocess.Popen
+
+    def spy(*args, **kwargs):
+        p = real_popen(*args, **kwargs)
+        started.append(p)
+        return p
+
+    calls = 0
+    real_frombuffer = np.frombuffer
+
+    def boom(*args, **kwargs):
+        nonlocal calls
+        calls += 1
+        if calls == 3:
+            raise KeyboardInterrupt
+        return real_frombuffer(*args, **kwargs)
+
+    monkeypatch.setattr(motion.subprocess, "Popen", spy)
+    monkeypatch.setattr(motion.np, "frombuffer", boom)
+    with pytest.raises(KeyboardInterrupt):
+        read_motion(src, 0, 320, 180)
+    assert calls == 3
+    assert started and started[0].poll() is not None

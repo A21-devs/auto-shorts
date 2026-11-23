@@ -70,16 +70,24 @@ def read_motion(path: Path, video_stream: int, width: int, height: int, start: f
         proc = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=err)
         assert proc.stdout is not None
         prev: npt.NDArray[np.int16] | None = None
-        while True:
-            buf = proc.stdout.read(frame_bytes)
-            if len(buf) < frame_bytes:
-                break
-            cur = np.frombuffer(buf, dtype=np.uint8).reshape(h, w).astype(np.int16)
-            if prev is not None:
-                rows.append(np.abs(cur - prev).mean(axis=0).astype(np.float32))
-            prev = cur
-        proc.stdout.close()
-        code = proc.wait()
+        finished = False
+        try:
+            while True:
+                buf = proc.stdout.read(frame_bytes)
+                if len(buf) < frame_bytes:
+                    break
+                cur = np.frombuffer(buf, dtype=np.uint8).reshape(h, w).astype(np.int16)
+                if prev is not None:
+                    rows.append(np.abs(cur - prev).mean(axis=0).astype(np.float32))
+                prev = cur
+            finished = True
+        finally:
+            # an exception mid-read (Ctrl+C, a failed job in `serve`) must not leave ffmpeg
+            # decoding the rest of the video in the background
+            proc.stdout.close()
+            if not finished:
+                proc.kill()
+            code = proc.wait()
         if code != 0:
             err.seek(0)
             tail = "\n".join(err.read().decode(errors="replace").strip().splitlines()[-5:])
@@ -105,9 +113,11 @@ def focus(motion: Motion, window: float = 1.0, still: float = STILL) -> FloatArr
     excess = np.clip(cols - np.median(cols, axis=1, keepdims=True), 0, None)
     x = (np.arange(cols.shape[1], dtype=np.float32) + 0.5) / cols.shape[1]
     for i in range(n):
-        if float(cols[i * per:(i + 1) * per].mean()) < still:
+        # row 0 is the placeholder (no previous frame), it would drag the first window down
+        lo, hi = max(1, i * per), (i + 1) * per
+        if lo >= min(hi, len(cols)) or float(cols[lo:hi].mean()) < still:
             continue
-        weights = excess[i * per:(i + 1) * per].sum(axis=0)
+        weights = excess[lo:hi].sum(axis=0)
         total = float(weights.sum())
         if total > 0:
             out[i] = float((weights * x).sum() / total)
