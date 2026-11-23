@@ -51,7 +51,8 @@ def _video_rank(s: dict[str, Any]) -> tuple[int, int]:
     is_picture = (
         bool(s.get("disposition", {}).get("attached_pic"))
         or s.get("codec_name") in _IMAGE_CODECS
-        or str(s.get("nb_frames", "")) in ("0", "1")
+        # exactly one frame = still image. "0" just means ffprobe doesn't know (fragmented MP4).
+        or str(s.get("nb_frames", "")) == "1"
     )
     return (0 if is_picture else 1, int(s.get("width", 0)) * int(s.get("height", 0)))
 

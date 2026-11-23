@@ -7,6 +7,13 @@ def test_real_video_beats_bigger_thumbnail():
     assert max([video, thumb], key=_video_rank) is video
 
 
+def test_unknown_frame_count_is_not_a_picture():
+    # fragmented MP4: ffprobe reports nb_frames=0 for the real video
+    video = {"codec_name": "h264", "width": 1280, "height": 720, "nb_frames": "0"}
+    thumb = {"codec_name": "mjpeg", "width": 1920, "height": 1080, "nb_frames": "1"}
+    assert max([video, thumb], key=_video_rank) is video
+
+
 def test_attached_pic_is_skipped_even_if_h264():
     cover = {"codec_name": "h264", "width": 3000, "height": 3000, "disposition": {"attached_pic": 1}}
     video = {"codec_name": "h264", "width": 1280, "height": 720}
