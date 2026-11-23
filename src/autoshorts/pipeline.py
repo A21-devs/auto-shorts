@@ -163,7 +163,12 @@ def rerender_clip(manifest: Path, n: int, start: float, end: float, log: Log = p
     out_dir = manifest.parent
     entry = clips[n - 1]
     base = Path(entry["file"]).stem
-    words = transcribe.load_words(out_dir / data["words"]) if data.get("words") else []
+    words: list[transcribe.Word] = []
+    if data.get("words"):
+        try:
+            words = transcribe.load_words(out_dir / data["words"])
+        except (OSError, ValueError, TypeError) as e:
+            log(f"can't read the transcript ({e}), re-rendering without captions")
     info = probe(Path(data["source"]))
     log(f"re-rendering {entry['file']}: {start:.1f}s - {end:.1f}s")
     try:
@@ -178,6 +183,10 @@ def rerender_clip(manifest: Path, n: int, start: float, end: float, log: Log = p
         sub = f"{base}.ass"
         os.replace(out_dir / tmp_sub, out_dir / sub)
         entry["subtitles"] = sub
+    elif entry.get("subtitles"):
+        # the old captions are for the old range, don't leave them looking like they belong to this clip
+        (out_dir / Path(entry["subtitles"]).name).unlink(missing_ok=True)
+        entry["subtitles"] = None
     entry.update(start=round(start, 2), end=round(end, 2), edited=True)
     _write_manifest(manifest, data)
     return dict(entry)

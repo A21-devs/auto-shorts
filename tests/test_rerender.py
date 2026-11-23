@@ -64,6 +64,47 @@ def test_failed_render_keeps_old_clip(tmp_path: Path, monkeypatch: pytest.Monkey
     assert json.loads(manifest.read_text())["clips"][0]["start"] == 10.0
 
 
+def fake_render(_info, _a, _b, out: Path, *_args, **_kw):
+    out.write_bytes(b"new clip")
+
+
+def test_old_manifest_drops_stale_captions(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
+    # manifests from before `words` existed: the clip had captions but there's no transcript to rebuild them
+    manifest = fake_run(tmp_path)
+    data = json.loads(manifest.read_text())
+    del data["words"]
+    data["clips"][0]["subtitles"] = "src_clip01.ass"
+    manifest.write_text(json.dumps(data))
+    (tmp_path / "src_clip01.ass").write_text("old captions")
+    monkeypatch.setattr(pipeline, "probe", lambda p: None)
+    monkeypatch.setattr(pipeline, "render", fake_render)
+
+    entry = rerender_clip(manifest, 1, 5, 20, log=lambda _m: None)
+
+    assert entry["subtitles"] is None
+    assert not (tmp_path / "src_clip01.ass").exists()
+    assert (tmp_path / "src_clip01.mp4").read_bytes() == b"new clip"
+
+
+@pytest.mark.parametrize("contents", [None, "not json", '[["a"]]'])
+def test_unreadable_transcript_renders_without_captions(tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+                                                        contents: str | None):
+    manifest = fake_run(tmp_path)
+    data = json.loads(manifest.read_text())
+    data["words"] = "src_words.json"
+    manifest.write_text(json.dumps(data))
+    if contents is not None:
+        (tmp_path / "src_words.json").write_text(contents)
+    monkeypatch.setattr(pipeline, "probe", lambda p: None)
+    monkeypatch.setattr(pipeline, "render", fake_render)
+    logs: list[str] = []
+
+    entry = rerender_clip(manifest, 1, 5, 20, log=logs.append)
+
+    assert entry["subtitles"] is None
+    assert any("without captions" in m for m in logs)
+
+
 @pytest.mark.ffmpeg
 @pytest.mark.skipif(not shutil.which("ffmpeg"), reason="needs ffmpeg")
 def test_rerender_real_clip_with_captions(tmp_path: Path):
