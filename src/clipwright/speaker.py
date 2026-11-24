@@ -68,7 +68,10 @@ def available() -> bool:
 def haar_detector(min_face: float = 0.08) -> Detector:
     """OpenCV's frontal face cascade. Faces smaller than `min_face` of the frame height are
     ignored: on a podcast those are posters and people in the background."""
-    import cv2
+    try:
+        import cv2
+    except ImportError:
+        raise RuntimeError('the speaker layout needs OpenCV: pip install "clipwright[speaker]"') from None
 
     # cv2.data is a plain package next to the extension module, the bundled stubs leave it out
     cascade_dir: str = cv2.data.haarcascades  # type: ignore[attr-defined]
@@ -90,13 +93,27 @@ def mouth_box(box: Box) -> Box:
     return x + w // 4, y + (h * 2) // 3, max(1, w // 2), max(1, h // 3)
 
 
-def mouth_change(cur: Gray, prev: Gray | None, box: Box) -> float:
-    if prev is None:
-        return 0.0
-    x, y, w, h = mouth_box(box)
+def eye_box(box: Box) -> Box:
+    """A band across the eyes and nose, the same width as the mouth box. It moves with the head
+    but not with the jaw."""
+    x, y, w, h = box
+    return x + w // 4, y + h // 4, max(1, w // 2), max(1, h // 4)
+
+
+def _change(cur: Gray, prev: Gray, box: Box) -> float:
+    x, y, w, h = box
     a = cur[y:y + h, x:x + w].astype(np.int16)
     b = prev[y:y + h, x:x + w].astype(np.int16)
     return float(np.abs(a - b).mean()) if a.size else 0.0
+
+
+def mouth_change(cur: Gray, prev: Gray | None, box: Box) -> float:
+    """How much the mouth moved relative to the rest of the face. The eye band's change is
+    taken off, so a head that nods or shifts doesn't count as talking (a 3 px head shift
+    scored 23.8 without this, more than real mouth movement)."""
+    if prev is None:
+        return 0.0
+    return max(0.0, _change(cur, prev, mouth_box(box)) - _change(cur, prev, eye_box(box)))
 
 
 def faces_in(cur: Gray, prev: Gray | None, detect: Detector) -> list[Face]:
