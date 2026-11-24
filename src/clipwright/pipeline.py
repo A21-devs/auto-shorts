@@ -13,7 +13,7 @@ from typing import Any
 
 import numpy as np
 
-from . import audio, jumpcut, scenes, segment, subtitles, transcribe
+from . import audio, jumpcut, platforms, scenes, segment, subtitles, transcribe
 from .captions import CaptionStyle, build_ass
 from .probe import MediaInfo, probe
 from .render import RenderOptions, render
@@ -38,6 +38,8 @@ class Job:
     hop: float = 0.5
     # existing subtitles to use instead of Whisper (also works when the audio track is silent)
     srt: Path | None = None
+    # what the clips are cut for (platforms.PLATFORMS key), recorded in the manifest
+    platform: str | None = None
 
 
 def _no_progress(_stage: str, _fraction: float) -> None:
@@ -188,7 +190,8 @@ def run(job: Job, log: Log = print, progress: Progress = _no_progress) -> Path:
         progress("render", i / len(clips))
 
     manifest = out_dir / "manifest.json"
-    _write_manifest(manifest, {"source": str(info.path), "duration": info.duration, "render": asdict(job.render),
+    _write_manifest(manifest, {"source": str(info.path), "duration": info.duration, "platform": job.platform,
+                               "render": asdict(job.render),
                                "words": words_file, "clips": results})
     progress("done", 1.0)
     return manifest
@@ -213,6 +216,9 @@ def rerender_clip(manifest: Path, n: int, start: float, end: float, log: Log = p
     start, end = max(0.0, float(start)), min(float(data["duration"]), float(end))
     if end - start < MIN_CLIP:
         raise ValueError(f"clip must be at least {MIN_CLIP:g}s long (got {start:.2f}s - {end:.2f}s)")
+    target = platforms.PLATFORMS.get(data.get("platform") or "")
+    if target and end - start > target.limit:
+        raise ValueError(f"{target.name} clips can be at most {target.limit:g}s (this range is {end - start:.1f}s)")
 
     out_dir = manifest.parent
     entry = clips[n - 1]

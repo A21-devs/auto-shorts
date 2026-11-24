@@ -75,6 +75,14 @@
       <input type="text" name="video" required placeholder="C:\Videos\my stream.mp4" autocomplete="off">
     </label>
     <label>Clips <input type="number" name="count" value="6" min="1" max="50"></label>
+    <label>For
+      <select name="platform">
+        <option value="">any</option>
+        <option value="shorts" data-min="15" data-max="58">YouTube Shorts</option>
+        <option value="tiktok" data-min="15" data-max="60">TikTok</option>
+        <option value="reels" data-min="15" data-max="60">Instagram Reels</option>
+      </select>
+    </label>
     <label>Min seconds <input type="number" name="min" value="20" min="1" max="600" step="any"></label>
     <label>Max seconds <input type="number" name="max" value="55" min="1" max="600" step="any"></label>
     <label>Layout
@@ -338,6 +346,14 @@ function watch(jobId) {
   poll();
 }
 
+// picking a platform fills in its clip lengths, which can still be changed by hand
+document.querySelector('select[name="platform"]').addEventListener("change", (ev) => {
+  const opt = ev.target.selectedOptions[0];
+  const form = $("new-job");
+  form.elements.min.value = opt.dataset.min || 20;
+  form.elements.max.value = opt.dataset.max || 55;
+});
+
 $("new-job").addEventListener("submit", async (ev) => {
   ev.preventDefault();
   const f = new FormData(ev.target);
@@ -348,6 +364,7 @@ $("new-job").addEventListener("submit", async (ev) => {
     max: Number(f.get("max")),
     layout: f.get("layout"),
     model: f.get("model"),
+    platform: f.get("platform") || null,
     captions: f.get("captions") === "on",
     jumpcut: f.get("jumpcut") === "on",
   };
