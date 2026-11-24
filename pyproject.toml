@@ -18,6 +18,8 @@ gpu = ["faster-whisper>=1.1", "nvidia-cublas-cu12>=12.4,<12.9", "nvidia-cudnn-cu
 link = ["yt-dlp>=2025.1"]
 # face tracking for --layout speaker (OpenCV 5 no longer ships the face cascade)
 speaker = ["opencv-python-headless>=4.10,<5"]
+# MCP server (`clipwright mcp`) so AI agents can make clips
+mcp = ["mcp>=2,<3"]
 
 [project.scripts]
 clipwright = "clipwright.cli:main"
@@ -30,6 +32,7 @@ dev = [
     "ruff>=0.8",
     "mypy>=1.13",
     "opencv-python-headless>=4.10,<5",
+    "mcp>=2,<3",
 ]
 
 [build-system]
@@ -48,7 +51,7 @@ strict = true
 files = ["src"]
 
 [[tool.mypy.overrides]]
-module = ["faster_whisper.*", "yt_dlp.*"]
+module = ["faster_whisper.*", "yt_dlp.*", "mcp.*"]
 ignore_missing_imports = true
 
 [tool.pytest.ini_options]
