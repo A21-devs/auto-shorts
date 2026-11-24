@@ -13,7 +13,7 @@ from typing import Any
 
 import numpy as np
 
-from . import audio, scenes, segment, transcribe
+from . import audio, jumpcut, scenes, segment, transcribe
 from .captions import CaptionStyle, build_ass
 from .probe import MediaInfo, probe
 from .render import RenderOptions, render
@@ -103,16 +103,34 @@ def remove_stale_clips(out_dir: Path, stem: str, keep: int) -> int:
     return removed
 
 
+def plan_cuts(info: MediaInfo, start: float, end: float) -> jumpcut.Ranges | None:
+    """Clip-relative ranges to keep for --jumpcut, or None when there's nothing to cut."""
+    if not info.has_audio:
+        return None
+    pcm = audio.decode_pcm(info.path, start=start, duration=end - start)
+    keep = jumpcut.keep_ranges(end - start, jumpcut.dead_air(pcm))
+    if not keep or keep == [(0.0, round(end - start, 3))]:
+        return None  # nothing to cut, or nothing left (all silence): render it as it is
+    return keep
+
+
 def _render_one(info: MediaInfo, words: list[transcribe.Word], start: float, end: float, out_dir: Path,
-                base: str, opts: RenderOptions, suffix: str = "") -> tuple[str, str | None]:
-    """Writes <base><suffix>.ass (if there are words) and renders <base><suffix>.mp4. Returns both names."""
+                base: str, opts: RenderOptions, suffix: str = "") -> tuple[str, str | None, float]:
+    """Writes <base><suffix>.ass (if there are words) and renders <base><suffix>.mp4.
+    Returns both names and the length of the rendered clip (shorter than end - start with jump cuts)."""
     name = f"{base}{suffix}.mp4"
+    keep = plan_cuts(info, start, end) if opts.jumpcut else None
+    length = jumpcut.kept_duration(keep) if keep else end - start
     sub = None
     if words:
         sub = f"{base}{suffix}.ass"
-        (out_dir / sub).write_text(build_ass(words, start, end, CaptionStyle()), encoding="utf-8")
-    render(info, start, end, out_dir / name, opts, sub, workdir=out_dir)
-    return name, sub
+        if keep:
+            ass = build_ass(jumpcut.retime_words(words, start, keep), 0.0, length, CaptionStyle())
+        else:
+            ass = build_ass(words, start, end, CaptionStyle())
+        (out_dir / sub).write_text(ass, encoding="utf-8")
+    render(info, start, end, out_dir / name, opts, sub, workdir=out_dir, keep=keep)
+    return name, sub, length
 
 
 def _write_manifest(path: Path, data: dict[str, Any]) -> None:
@@ -146,9 +164,17 @@ def run(job: Job, log: Log = print, progress: Progress = _no_progress) -> Path:
         why = ", ".join(clip.reasons)
         log(f"[{i}/{len(clips)}] {clip.start:7.1f}s - {clip.end:7.1f}s  score {clip.score:5.2f}  {why}")
         t = time.perf_counter()
-        name, sub = _render_one(info, words, clip.start, clip.end, out_dir, f"{stem}_clip{i:02d}", job.render)
-        log(f"         rendered {name} in {time.perf_counter() - t:.1f}s")
-        results.append({**asdict(clip), "file": name, "subtitles": sub})
+        name, sub, length = _render_one(info, words, clip.start, clip.end, out_dir, f"{stem}_clip{i:02d}",
+                                        job.render)
+        # round once, so the log and the review page (which reads the manifest) show the same number
+        length = round(length, 2)
+        cut = clip.duration - length
+        log(f"         rendered {name} in {time.perf_counter() - t:.1f}s"
+            + (f", cut {cut:.1f}s of pauses ({length:.1f}s left)" if cut > 0.05 else ""))
+        if length < job.clips.min_len - 0.05:
+            # clips are picked by range length, the cuts happen after that
+            log(f"         warning: {name} is {length:.1f}s after cutting pauses, under --min {job.clips.min_len:g}s")
+        results.append({**asdict(clip), "file": name, "subtitles": sub, "length": length})
         progress("render", i / len(clips))
 
     manifest = out_dir / "manifest.json"
@@ -194,8 +220,8 @@ def rerender_clip(manifest: Path, n: int, start: float, end: float, log: Log = p
     info = probe(source)
     log(f"re-rendering {entry['file']}: {start:.1f}s - {end:.1f}s")
     try:
-        tmp_name, tmp_sub = _render_one(info, words, start, end, out_dir, base,
-                                        _render_options(data.get("render")), suffix=".tmp")
+        tmp_name, tmp_sub, length = _render_one(info, words, start, end, out_dir, base,
+                                                _render_options(data.get("render")), suffix=".tmp")
     except BaseException:
         for leftover in (f"{base}.tmp.mp4", f"{base}.tmp.ass"):
             (out_dir / leftover).unlink(missing_ok=True)
@@ -209,7 +235,7 @@ def rerender_clip(manifest: Path, n: int, start: float, end: float, log: Log = p
         # the old captions are for the old range, don't leave them looking like they belong to this clip
         (out_dir / Path(entry["subtitles"]).name).unlink(missing_ok=True)
         entry["subtitles"] = None
-    entry.update(start=round(start, 2), end=round(end, 2), edited=True)
+    entry.update(start=round(start, 2), end=round(end, 2), length=round(length, 2), edited=True)
     _write_manifest(manifest, data)
     return dict(entry)
 

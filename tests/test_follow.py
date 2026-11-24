@@ -20,7 +20,8 @@ def _f(*values: float) -> np.ndarray:
 def _centre_at(keys: list[tuple[float, float]], t: float) -> float:
     """Reference evaluation of centre_expr in Python (same formula ffmpeg sees)."""
     expr = centre_expr(keys).replace("clip(", "_clip(")
-    return float(eval(expr, {"t": t, "_clip": lambda x, lo, hi: min(hi, max(lo, x))}))
+    return float(eval(expr, {"t": t, "_clip": lambda x, lo, hi: min(hi, max(lo, x)),
+                             "gte": lambda a, b: float(a >= b)}))
 
 
 def test_source_already_narrow_means_centre():
@@ -98,6 +99,14 @@ def test_centre_expr_matches_the_keyframes():
     for t, want in [(0, 0.3), (1, 0.3), (3, 0.5), (4, 0.7), (5, 0.6), (6, 0.5), (60, 0.5)]:
         assert _centre_at(keys, t) == pytest.approx(want, abs=1e-4)
     assert centre_expr([(0.0, 0.42)]) == "0.4200"
+
+
+def test_zero_length_segment_is_a_step_not_dropped():
+    # a jump cut collapsed 2.0-3.0 to a single instant: the 0.1 move must still happen
+    keys = [(0.0, 0.3), (2.0, 0.3), (2.0, 0.4), (4.0, 0.6)]
+    assert _centre_at(keys, 1.0) == pytest.approx(0.3)
+    assert _centre_at(keys, 2.5) == pytest.approx(0.45)
+    assert _centre_at(keys, 5.0) == pytest.approx(0.6)
 
 
 def test_follow_filter_uses_the_expression():

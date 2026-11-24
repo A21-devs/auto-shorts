@@ -20,10 +20,14 @@ SILENCE_DB = -50.0
 FloatArray = npt.NDArray[np.float64]
 
 
-def decode_pcm(path: Path, sample_rate: int = SAMPLE_RATE) -> npt.NDArray[np.float32]:
-    """Returns the first audio track as float32 mono in [-1, 1]."""
+def decode_pcm(path: Path, sample_rate: int = SAMPLE_RATE, start: float | None = None,
+               duration: float | None = None) -> npt.NDArray[np.float32]:
+    """Returns the first audio track (or [start, start + duration) of it) as float32 mono in [-1, 1]."""
+    seek = ["-ss", f"{start:.3f}"] if start is not None else []
+    if duration is not None:
+        seek += ["-t", f"{duration:.3f}"]
     proc = subprocess.run(
-        [require("ffmpeg"), "-v", "error", "-i", str(path), "-map", "0:a:0", "-vn",
+        [require("ffmpeg"), "-v", "error", *seek, "-i", str(path), "-map", "0:a:0", "-vn",
          "-ac", "1", "-ar", str(sample_rate), "-f", "s16le", "-"],
         capture_output=True,
     )

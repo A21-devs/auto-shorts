@@ -11,7 +11,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Literal
 
-from . import follow, motion
+from . import follow, jumpcut, motion
 from .probe import MediaInfo, require
 
 Layout = Literal["crop", "blur", "fit", "follow"]
@@ -27,6 +27,7 @@ class RenderOptions:
     quality: int = 21               # CQ for nvenc, CRF for x264 (lower = better)
     max_fps: int = 60
     normalize_audio: bool = True
+    jumpcut: bool = False           # cut out pauses inside the clip (needs audio)
 
 
 @functools.cache
@@ -141,21 +142,48 @@ def fit_gain(info: MediaInfo, start: float, end: float) -> float | None:
     return gain
 
 
+def jumpcut_filter(keep: jumpcut.Ranges, audio: bool, gain: str | None) -> str:
+    """Graph that keeps only the `keep` ranges (clip-relative) of [0:v] (and [0:a:0]) and joins
+    them, ending in [jv] (and [aout], with the gain chain applied).
+
+    trim + concat rather than select/setpts: select needs setpts=N/FRAME_RATE/TB to close the
+    gaps, which drifts against the audio on variable frame rate recordings."""
+    n = len(keep)
+    g = f"[0:v]split={n}" + "".join(f"[s{i}]" for i in range(n)) + ";"
+    if audio:
+        g += f"[0:a:0]asplit={n}" + "".join(f"[t{i}]" for i in range(n)) + ";"
+    pairs = ""
+    for i, (a, b) in enumerate(keep):
+        g += f"[s{i}]trim=start={a:.3f}:end={b:.3f},setpts=PTS-STARTPTS[v{i}];"
+        if audio:
+            g += f"[t{i}]atrim=start={a:.3f}:end={b:.3f},asetpts=PTS-STARTPTS[a{i}];"
+        pairs += f"[v{i}][a{i}]" if audio else f"[v{i}]"
+    if audio:
+        g += f"{pairs}concat=n={n}:v=1:a=1[jv][ja];[ja]{gain or 'anull'}[aout]"
+    else:
+        g += f"{pairs}concat=n={n}:v=1:a=0[jv]"
+    return g
+
+
 def build_command(info: MediaInfo, start: float, end: float, out: Path, opts: RenderOptions,
                   subtitle_file: str | None = None, gain_db: float | None = None,
-                  crop_x: str | None = None) -> list[str]:
+                  crop_x: str | None = None, keep: jumpcut.Ranges | None = None) -> list[str]:
+    """`keep`: clip-relative ranges to keep (jump cuts). None, or one range covering the whole
+    clip, renders it straight through."""
     enc = pick_encoder(opts.encoder)
-    cmd = [require("ffmpeg"), "-hide_banner", "-y", "-ss", f"{start:.3f}", "-t", f"{end - start:.3f}",
-           "-i", str(info.path),
-           "-filter_complex", video_filter(opts.layout, subtitle_file, info.fps, opts.max_fps, crop_x),
-           "-map", "[vout]"]
+    gain = gain_chain(gain_db) if info.has_audio and opts.normalize_audio and gain_db is not None else None
+    graph = video_filter(opts.layout, subtitle_file, info.fps, opts.max_fps, crop_x)
+    cut = keep is not None and len(keep) > 0 and keep != [(0.0, round(end - start, 3))]
+    if keep is not None and cut:
+        graph = jumpcut_filter(keep, info.has_audio, gain) + ";" + graph.replace("[0:v]", "[jv]", 1)
     # the filter graph reads [0:v], make sure it's the stream we probed (not a cover image)
-    cmd[cmd.index("-filter_complex") + 1] = cmd[cmd.index("-filter_complex") + 1].replace(
-        "[0:v]", f"[0:{info.video_stream}]", 1)
+    graph = graph.replace("[0:v]", f"[0:{info.video_stream}]", 1)
+    cmd = [require("ffmpeg"), "-hide_banner", "-y", "-ss", f"{start:.3f}", "-t", f"{end - start:.3f}",
+           "-i", str(info.path), "-filter_complex", graph, "-map", "[vout]"]
     if info.has_audio:
-        cmd += ["-map", "0:a:0", "-c:a", "aac", "-b:a", "160k", "-ar", "48000"]
-        if opts.normalize_audio and gain_db is not None:
-            cmd += ["-af", gain_chain(gain_db)]
+        cmd += ["-map", "[aout]" if cut else "0:a:0", "-c:a", "aac", "-b:a", "160k", "-ar", "48000"]
+        if gain and not cut:
+            cmd += ["-af", gain]
     if enc == "h264_nvenc":
         cmd += ["-c:v", "h264_nvenc", "-preset", "p5", "-rc", "vbr", "-cq", str(opts.quality), "-b:v", "0"]
     else:
@@ -164,19 +192,23 @@ def build_command(info: MediaInfo, start: float, end: float, out: Path, opts: Re
     return cmd
 
 
-def follow_crop_x(info: MediaInfo, start: float, end: float) -> str | None:
+def follow_crop_x(info: MediaInfo, start: float, end: float, keep: jumpcut.Ranges | None = None) -> str | None:
     """crop x expression that pans toward the action in [start, end], or None when the source is
-    already 9:16 or narrower (nothing to pan)."""
+    already 9:16 or narrower (nothing to pan). With jump cuts the keyframes are moved onto the
+    shortened timeline, since crop sees the frames after concat."""
     scaled_w = info.width * H / info.height
     if scaled_w <= W + 1:
         return None
     m = motion.read_motion(info.path, info.video_stream, info.width, info.height, start, end - start)
     keys = follow.camera_path(motion.focus(m, window=1.0), step=1.0, window=W / scaled_w)
+    if keep:
+        keys = [(jumpcut.retime(t, keep), c) for t, c in keys]
     return follow.crop_x_expr(keys)
 
 
 def render(info: MediaInfo, start: float, end: float, out: Path, opts: RenderOptions,
-           subtitle_file: str | None = None, workdir: Path | None = None) -> None:
+           subtitle_file: str | None = None, workdir: Path | None = None,
+           keep: jumpcut.Ranges | None = None) -> None:
     # libass paths on Windows need escaping (C\:/...), running in the subtitle's folder
     # with a bare file name avoids that. The name itself also goes into the filter graph,
     # where , ; ' [ ] and : mean something, so anything unusual gets a safe temp name.
@@ -187,8 +219,8 @@ def render(info: MediaInfo, start: float, end: float, out: Path, opts: RenderOpt
         shutil.copyfile(base / subtitle_file, temp_sub)
         subtitle_file = temp_sub.name
     gain = fit_gain(info, start, end) if info.has_audio and opts.normalize_audio else None
-    crop_x = follow_crop_x(info, start, end) if opts.layout == "follow" else None
-    cmd = build_command(info, start, end, out.resolve(), opts, subtitle_file, gain, crop_x)
+    crop_x = follow_crop_x(info, start, end, keep) if opts.layout == "follow" else None
+    cmd = build_command(info, start, end, out.resolve(), opts, subtitle_file, gain, crop_x, keep)
     try:
         proc = subprocess.run(cmd, cwd=workdir, capture_output=True, text=True, errors="replace")
     finally:

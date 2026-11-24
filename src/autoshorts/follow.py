@@ -92,9 +92,14 @@ def centre_expr(keys: Keyframes) -> str:
     No if/else nesting, so it stays flat however many keyframes there are."""
     expr = f"{keys[0][1]:.4f}"
     for (t0, c0), (t1, c1) in zip(keys, keys[1:], strict=False):
-        if abs(c1 - c0) < 1e-6 or t1 <= t0:
+        if abs(c1 - c0) < 1e-6:
             continue
-        expr += f"{c1 - c0:+.4f}*clip((t-{t0:.3f})/{t1 - t0:.3f},0,1)"
+        if t1 - t0 < 1e-3:
+            # zero-length segment (a jump cut removed the time in between): a hard step.
+            # Skipping it would drop its delta and leave every later position off by that much
+            expr += f"{c1 - c0:+.4f}*gte(t,{t0:.3f})"
+        else:
+            expr += f"{c1 - c0:+.4f}*clip((t-{t0:.3f})/{t1 - t0:.3f},0,1)"
     return expr
 
 

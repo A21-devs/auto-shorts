@@ -89,6 +89,7 @@
       </select>
     </label>
     <label class="check"><input type="checkbox" name="captions" checked> Captions</label>
+    <label class="check"><input type="checkbox" name="jumpcut"> Cut pauses</label>
     <button class="primary" type="submit">Make shorts</button>
     <!-- separate from #error so the next status poll doesn't wipe it -->
     <div class="error" id="form-error" role="alert"></div>
@@ -240,7 +241,10 @@ function clipCard(job, manifest, clip, n) {
     const changed = start !== clip.start || end !== clip.end;
     if (changed) pending.set(key, { start, end });
     else pending.delete(key);
-    times.textContent = `${fmt(start)} - ${fmt(end)}  (${(end - start).toFixed(1)}s)${changed ? "  edited" : ""}`;
+    // with jump cuts the file is shorter than its range. Only known for the rendered range
+    const cutLen = !changed && clip.length != null && clip.end - clip.start - clip.length > 0.05
+      ? `, ${clip.length.toFixed(1)}s after cuts` : "";
+    times.textContent = `${fmt(start)} - ${fmt(end)}  (${(end - start).toFixed(1)}s${cutLen})${changed ? "  edited" : ""}`;
     rerender.disabled = !changed;
     reset.disabled = !changed;
   };
@@ -345,6 +349,7 @@ $("new-job").addEventListener("submit", async (ev) => {
     layout: f.get("layout"),
     model: f.get("model"),
     captions: f.get("captions") === "on",
+    jumpcut: f.get("jumpcut") === "on",
   };
   const button = ev.target.querySelector("button");
   button.disabled = true;
