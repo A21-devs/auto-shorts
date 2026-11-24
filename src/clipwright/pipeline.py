@@ -13,7 +13,7 @@ from typing import Any
 
 import numpy as np
 
-from . import audio, jumpcut, scenes, segment, subtitles, transcribe
+from . import audio, jumpcut, platforms, scenes, segment, subtitles, transcribe
 from .captions import CaptionStyle, build_ass
 from .probe import MediaInfo, probe
 from .render import RenderOptions, render
@@ -216,6 +216,9 @@ def rerender_clip(manifest: Path, n: int, start: float, end: float, log: Log = p
     start, end = max(0.0, float(start)), min(float(data["duration"]), float(end))
     if end - start < MIN_CLIP:
         raise ValueError(f"clip must be at least {MIN_CLIP:g}s long (got {start:.2f}s - {end:.2f}s)")
+    target = platforms.PLATFORMS.get(data.get("platform") or "")
+    if target and end - start > target.limit:
+        raise ValueError(f"{target.name} clips can be at most {target.limit:g}s (this range is {end - start:.1f}s)")
 
     out_dir = manifest.parent
     entry = clips[n - 1]

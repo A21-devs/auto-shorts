@@ -32,6 +32,15 @@ def test_words_round_trip(tmp_path: Path):
     assert load_words(tmp_path / "w.json") == words
 
 
+def test_rerender_respects_the_platform_limit(tmp_path: Path):
+    manifest = fake_run(tmp_path)
+    data = json.loads(manifest.read_text())
+    data["platform"], data["duration"] = "shorts", 120.0
+    manifest.write_text(json.dumps(data))
+    with pytest.raises(ValueError, match="at most 60s"):
+        rerender_clip(manifest, 1, 0, 61, log=lambda _m: None)
+
+
 @pytest.mark.parametrize("n", [0, 3, -1])
 def test_bad_clip_number(tmp_path: Path, n: int):
     with pytest.raises(ValueError, match="doesn't exist"):

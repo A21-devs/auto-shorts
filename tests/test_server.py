@@ -92,6 +92,17 @@ def test_parse_job_defaults(video: Path):
     assert parse_job({"video": str(video), "jumpcut": True}).render.jumpcut
 
 
+def test_form_presets_match_python():
+    # the form fills min/max from data attributes, and always sends them, so they must not drift
+    import re
+
+    from clipwright.platforms import PLATFORMS
+    html = (Path(__file__).parents[1] / "src" / "clipwright" / "web" / "index.html").read_text(encoding="utf-8")
+    found = {k: (float(a), float(b)) for k, a, b in
+             re.findall(r'<option value="(\w+)" data-min="([\d.]+)" data-max="([\d.]+)"', html)}
+    assert found == {k: (p.min_len, p.max_len) for k, p in PLATFORMS.items()}
+
+
 def test_parse_job_platform(video: Path):
     job = parse_job({"video": str(video), "platform": "shorts"})
     assert (job.clips.min_len, job.clips.max_len, job.platform) == (15, 58, "shorts")
