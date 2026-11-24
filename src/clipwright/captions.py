@@ -99,3 +99,31 @@ def build_ass(words: Sequence[Word], clip_start: float, clip_end: float, style: 
             ]
             lines.append(f"Dialogue: 0,{_ts(start)},{_ts(end)},Cap,,0,0,0,,{' '.join(parts)}")
     return header + "\n".join(lines) + ("\n" if lines else "")
+
+
+def _srt_ts(t: float) -> str:
+    ms = int(round(max(0.0, t) * 1000))
+    h, ms = divmod(ms, 3_600_000)
+    m, ms = divmod(ms, 60_000)
+    s, ms = divmod(ms, 1000)
+    return f"{h:02d}:{m:02d}:{s:02d},{ms:03d}"
+
+
+def build_srt(words: Sequence[Word], clip_start: float, clip_end: float, max_chars: int = 42,
+              max_gap: float = 0.6) -> str:
+    """Plain .srt for the words inside [clip_start, clip_end], times relative to the clip.
+
+    This is the file you upload next to the video (YouTube, TikTok and others take one), so it
+    uses normal subtitle lines up to max_chars (42 is the usual broadcast limit) instead of the
+    3-word groups of the burned-in captions."""
+    inside = [w for w in words if w.end > clip_start and w.start < clip_end]
+    length = clip_end - clip_start
+    blocks: list[str] = []
+    for group in group_words(inside, max_words=max_chars, max_chars=max_chars, max_gap=max_gap):
+        start = max(group[0].start, clip_start) - clip_start
+        end = min(group[-1].end, clip_end) - clip_start
+        if end - start < 0.05:
+            continue
+        text = " ".join(w.text for w in group)
+        blocks.append(f"{len(blocks) + 1}\n{_srt_ts(start)} --> {_srt_ts(min(end, length))}\n{text}\n")
+    return "\n".join(blocks)

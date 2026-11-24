@@ -47,6 +47,8 @@
   .clip .meta { padding: 10px 12px; display: flex; flex-direction: column; gap: 6px; flex: 1; }
   .clip .times { font-variant-numeric: tabular-nums; }
   .clip .why { color: var(--muted); font-size: 13px; }
+  .clip .files { font-size: 13px; display: flex; gap: 12px; }
+  .clip .files a { color: var(--muted); }
   .clip .actions { display: flex; gap: 8px; margin-top: auto; }
   .clip .actions button { flex: 1; }
   .clip.keep { border-color: var(--keep); }
@@ -315,7 +317,16 @@ function clipCard(job, manifest, clip, n) {
   editRow.append(reset, rerender);
 
   showTimes();
-  meta.append(times, score, why, startRow, endRow, editRow, keepRow, err);
+  // the files to upload: the clip, and its captions as a separate .srt for platforms that take one
+  const files = el("div", "files");
+  for (const [label, name] of [["mp4", clip.file], ["srt", clip.srt]]) {
+    if (!name) continue;
+    const a = el("a", null, `download ${label}`);
+    a.href = fileUrl(job.id, name);
+    a.download = name;
+    files.append(a);
+  }
+  meta.append(times, score, why, files, startRow, endRow, editRow, keepRow, err);
   card.append(video, meta);
   return card;
 }

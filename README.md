@@ -43,6 +43,7 @@ For each clip:
 - 1080x1920 H.264 MP4. It uses NVENC if you have an NVIDIA GPU, otherwise x264.
 - Audio normalized to -14 LUFS (the usual target for shorts platforms).
 - Captions: word-by-word with the current word highlighted, burned in. The `.ass` file is kept next to the video if you want to edit it.
+- A plain `.srt` per clip (normal subtitle lines, up to 42 characters) to upload next to the video on platforms that take one.
 - `manifest.json` with every clip's time range, score and why it was picked.
 
 Layouts (`--layout`):

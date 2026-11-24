@@ -14,7 +14,7 @@ from typing import Any
 import numpy as np
 
 from . import audio, jumpcut, platforms, scenes, segment, subtitles, transcribe
-from .captions import CaptionStyle, build_ass
+from .captions import CaptionStyle, build_ass, build_srt
 from .probe import MediaInfo, probe
 from .render import RenderOptions, render
 
@@ -107,8 +107,8 @@ def analyze(info: MediaInfo, job: Job, log: Log,
 
 
 def remove_stale_clips(out_dir: Path, stem: str, keep: int) -> int:
-    """Deletes <stem>_clipNN.mp4/.ass with NN > keep. Only touches files that match our own naming."""
-    pattern = re.compile(re.escape(stem) + r"_clip(\d{2,})\.(mp4|ass)")
+    """Deletes <stem>_clipNN.mp4/.ass/.srt with NN > keep. Only touches files that match our own naming."""
+    pattern = re.compile(re.escape(stem) + r"_clip(\d{2,})\.(mp4|ass|srt)")
     removed = 0
     for f in out_dir.iterdir():
         m = pattern.fullmatch(f.name)
@@ -130,22 +130,28 @@ def plan_cuts(info: MediaInfo, start: float, end: float) -> jumpcut.Ranges | Non
 
 
 def _render_one(info: MediaInfo, words: list[transcribe.Word], start: float, end: float, out_dir: Path,
-                base: str, opts: RenderOptions, suffix: str = "") -> tuple[str, str | None, float]:
-    """Writes <base><suffix>.ass (if there are words) and renders <base><suffix>.mp4.
-    Returns both names and the length of the rendered clip (shorter than end - start with jump cuts)."""
+                base: str, opts: RenderOptions, suffix: str = "") -> tuple[str, str | None, str | None, float]:
+    """Writes <base><suffix>.ass (if there are words) and .srt (if any of them are in this clip) and
+    renders <base><suffix>.mp4. Returns the mp4, .ass and .srt names and the length of the rendered
+    clip (shorter than end - start with jump cuts)."""
     name = f"{base}{suffix}.mp4"
     keep = plan_cuts(info, start, end) if opts.jumpcut else None
     length = jumpcut.kept_duration(keep) if keep else end - start
-    sub = None
+    sub = srt = None
     if words:
         sub = f"{base}{suffix}.ass"
         if keep:
-            ass = build_ass(jumpcut.retime_words(words, start, keep), 0.0, length, CaptionStyle())
+            timed, t0, t1 = jumpcut.retime_words(words, start, keep), 0.0, length
         else:
-            ass = build_ass(words, start, end, CaptionStyle())
+            timed, t0, t1 = words, start, end
+        ass = build_ass(timed, t0, t1, CaptionStyle())
         (out_dir / sub).write_text(ass, encoding="utf-8")
+        srt_text = build_srt(timed, t0, t1)
+        if srt_text:  # a 0-byte .srt gets rejected on upload, no file is better
+            srt = f"{base}{suffix}.srt"
+            (out_dir / srt).write_text(srt_text, encoding="utf-8")
     render(info, start, end, out_dir / name, opts, sub, workdir=out_dir, keep=keep)
-    return name, sub, length
+    return name, sub, srt, length
 
 
 def _write_manifest(path: Path, data: dict[str, Any]) -> None:
@@ -179,7 +185,7 @@ def run(job: Job, log: Log = print, progress: Progress = _no_progress) -> Path:
         why = ", ".join(clip.reasons)
         log(f"[{i}/{len(clips)}] {clip.start:7.1f}s - {clip.end:7.1f}s  score {clip.score:5.2f}  {why}")
         t = time.perf_counter()
-        name, sub, length = _render_one(info, words, clip.start, clip.end, out_dir, f"{stem}_clip{i:02d}",
+        name, sub, srt, length = _render_one(info, words, clip.start, clip.end, out_dir, f"{stem}_clip{i:02d}",
                                         job.render)
         # round once, so the log and the review page (which reads the manifest) show the same number
         length = round(length, 2)
@@ -189,7 +195,7 @@ def run(job: Job, log: Log = print, progress: Progress = _no_progress) -> Path:
         if length < job.clips.min_len - 0.05:
             # clips are picked by range length, the cuts happen after that
             log(f"         warning: {name} is {length:.1f}s after cutting pauses, under --min {job.clips.min_len:g}s")
-        results.append({**asdict(clip), "file": name, "subtitles": sub, "length": length})
+        results.append({**asdict(clip), "file": name, "subtitles": sub, "srt": srt, "length": length})
         progress("render", i / len(clips))
 
     manifest = out_dir / "manifest.json"
@@ -240,21 +246,22 @@ def rerender_clip(manifest: Path, n: int, start: float, end: float, log: Log = p
     info = probe(source)
     log(f"re-rendering {entry['file']}: {start:.1f}s - {end:.1f}s")
     try:
-        tmp_name, tmp_sub, length = _render_one(info, words, start, end, out_dir, base,
+        tmp_name, tmp_sub, tmp_srt, length = _render_one(info, words, start, end, out_dir, base,
                                                 _render_options(data.get("render")), suffix=".tmp")
     except BaseException:
-        for leftover in (f"{base}.tmp.mp4", f"{base}.tmp.ass"):
+        for leftover in (f"{base}.tmp.mp4", f"{base}.tmp.ass", f"{base}.tmp.srt"):
             (out_dir / leftover).unlink(missing_ok=True)
         raise
     os.replace(out_dir / tmp_name, out_dir / entry["file"])
-    if tmp_sub:
-        sub = f"{base}.ass"
-        os.replace(out_dir / tmp_sub, out_dir / sub)
-        entry["subtitles"] = sub
-    elif entry.get("subtitles"):
-        # the old captions are for the old range, don't leave them looking like they belong to this clip
-        (out_dir / Path(entry["subtitles"]).name).unlink(missing_ok=True)
-        entry["subtitles"] = None
+    # the old captions are for the old range, don't leave them looking like they belong to this clip
+    for key, tmp, ext in (("subtitles", tmp_sub, ".ass"), ("srt", tmp_srt, ".srt")):
+        if tmp:
+            os.replace(out_dir / tmp, out_dir / f"{base}{ext}")
+            entry[key] = f"{base}{ext}"
+        else:
+            if entry.get(key):
+                (out_dir / Path(entry[key]).name).unlink(missing_ok=True)
+            entry[key] = None
     entry.update(start=round(start, 2), end=round(end, 2), length=round(length, 2), edited=True)
     _write_manifest(manifest, data)
     return dict(entry)
