@@ -166,13 +166,15 @@ def run(job: Job, log: Log = print, progress: Progress = _no_progress) -> Path:
         t = time.perf_counter()
         name, sub, length = _render_one(info, words, clip.start, clip.end, out_dir, f"{stem}_clip{i:02d}",
                                         job.render)
+        # round once, so the log and the review page (which reads the manifest) show the same number
+        length = round(length, 2)
         cut = clip.duration - length
         log(f"         rendered {name} in {time.perf_counter() - t:.1f}s"
             + (f", cut {cut:.1f}s of pauses ({length:.1f}s left)" if cut > 0.05 else ""))
         if length < job.clips.min_len - 0.05:
             # clips are picked by range length, the cuts happen after that
             log(f"         warning: {name} is {length:.1f}s after cutting pauses, under --min {job.clips.min_len:g}s")
-        results.append({**asdict(clip), "file": name, "subtitles": sub, "length": round(length, 2)})
+        results.append({**asdict(clip), "file": name, "subtitles": sub, "length": length})
         progress("render", i / len(clips))
 
     manifest = out_dir / "manifest.json"
