@@ -16,6 +16,8 @@ transcribe = ["faster-whisper>=1.1"]
 gpu = ["faster-whisper>=1.1", "nvidia-cublas-cu12>=12.4,<12.9", "nvidia-cudnn-cu12>=9,<10"]
 # paste a YouTube/Twitch/... link instead of a file
 link = ["yt-dlp>=2025.1"]
+# face tracking for --layout speaker (OpenCV 5 no longer ships the face cascade)
+speaker = ["opencv-python-headless>=4.10,<5"]
 
 [project.scripts]
 clipwright = "clipwright.cli:main"
@@ -23,7 +25,12 @@ clipwright = "clipwright.cli:main"
 autoshorts = "clipwright.cli:main"
 
 [dependency-groups]
-dev = ["pytest>=8.3", "ruff>=0.8", "mypy>=1.13"]
+dev = [
+    "pytest>=8.3",
+    "ruff>=0.8",
+    "mypy>=1.13",
+    "opencv-python-headless>=4.10,<5",
+]
 
 [build-system]
 requires = ["hatchling"]
