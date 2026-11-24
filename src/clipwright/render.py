@@ -11,10 +11,11 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Literal
 
-from . import follow, jumpcut, motion
+from . import follow, jumpcut, motion, speaker
 from .probe import MediaInfo, require
 
-Layout = Literal["crop", "blur", "fit", "follow"]
+Layout = Literal["crop", "blur", "fit", "follow", "speaker"]
+PANNED: tuple[Layout, ...] = ("follow", "speaker")  # layouts that move a 9:16 crop window over time
 
 W, H = 1080, 1920
 SAFE_NAME = re.compile(r"[A-Za-z0-9_.-]+")
@@ -59,11 +60,11 @@ def pick_encoder(requested: str) -> str:
 
 def video_filter(layout: Layout, subtitle_file: str | None, fps: float, max_fps: int,
                  crop_x: str | None = None) -> str:
-    """filter_complex graph from [0:v] to [vout]. `crop_x` is the x expression for "follow"
-    (without one it behaves like "crop")."""
-    if layout == "crop" or (layout == "follow" and not crop_x):
+    """filter_complex graph from [0:v] to [vout]. `crop_x` is the x expression for "follow" and
+    "speaker" (without one they behave like "crop")."""
+    if layout == "crop" or (layout in PANNED and not crop_x):
         g = f"[0:v]scale={W}:{H}:force_original_aspect_ratio=increase,crop={W}:{H},setsar=1[v]"
-    elif layout == "follow":
+    elif layout in PANNED:
         g = (f"[0:v]scale={W}:{H}:force_original_aspect_ratio=increase,"
              f"crop=w={W}:h={H}:x='{crop_x}':y='(ih-oh)/2',setsar=1[v]")
     elif layout == "fit":
@@ -206,6 +207,20 @@ def follow_crop_x(info: MediaInfo, start: float, end: float, keep: jumpcut.Range
     return follow.crop_x_expr(keys)
 
 
+def speaker_crop_x(info: MediaInfo, start: float, end: float, keep: jumpcut.Ranges | None = None) -> str | None:
+    """crop x expression that sits on whoever is talking in [start, end] and cuts between people,
+    or None when the source is already 9:16 or narrower. Jump cuts are handled like `follow`:
+    both keyframes of a cut map to the same shortened time, so it stays a cut."""
+    scaled_w = info.width * H / info.height
+    if scaled_w <= W + 1:
+        return None
+    faces = speaker.read_faces(info.path, info.video_stream, info.width, info.height, start, end - start)
+    keys = speaker.speaker_path(faces, window=W / scaled_w)
+    if keep:
+        keys = [(jumpcut.retime(t, keep), c) for t, c in keys]
+    return follow.crop_x_expr(keys)
+
+
 def render(info: MediaInfo, start: float, end: float, out: Path, opts: RenderOptions,
            subtitle_file: str | None = None, workdir: Path | None = None,
            keep: jumpcut.Ranges | None = None) -> None:
@@ -219,7 +234,11 @@ def render(info: MediaInfo, start: float, end: float, out: Path, opts: RenderOpt
         shutil.copyfile(base / subtitle_file, temp_sub)
         subtitle_file = temp_sub.name
     gain = fit_gain(info, start, end) if info.has_audio and opts.normalize_audio else None
-    crop_x = follow_crop_x(info, start, end, keep) if opts.layout == "follow" else None
+    crop_x: str | None = None
+    if opts.layout == "follow":
+        crop_x = follow_crop_x(info, start, end, keep)
+    elif opts.layout == "speaker":
+        crop_x = speaker_crop_x(info, start, end, keep)
     cmd = build_command(info, start, end, out.resolve(), opts, subtitle_file, gain, crop_x, keep)
     try:
         proc = subprocess.run(cmd, cwd=workdir, capture_output=True, text=True, errors="replace")

@@ -6,7 +6,7 @@ import argparse
 import sys
 from pathlib import Path
 
-from . import __version__, copywriting, download
+from . import __version__, copywriting, download, speaker
 from .pipeline import Job, run
 from .platforms import PLATFORMS, lengths
 from .probe import ToolMissing
@@ -27,9 +27,10 @@ def build_parser() -> argparse.ArgumentParser:
                         + ", ".join(f"{k} {v.min_len:g}-{v.max_len:g}s" for k, v in PLATFORMS.items()))
     p.add_argument("--min", dest="min_len", type=float, help="shortest clip in seconds (default 20, or the platform's)")
     p.add_argument("--max", dest="max_len", type=float, help="longest clip in seconds (default 55, or the platform's)")
-    p.add_argument("--layout", choices=["blur", "crop", "follow", "fit"], default="blur",
+    p.add_argument("--layout", choices=["blur", "crop", "follow", "speaker", "fit"], default="blur",
                    help="blur = video on a blurred background, crop = fill the frame, "
-                        "follow = fill the frame and pan toward the action, fit = black bars")
+                        "follow = fill the frame and pan toward the action, speaker = fill the frame and cut to "
+                        "whoever is talking (podcasts, interviews; needs clipwright[speaker]), fit = black bars")
     p.add_argument("--no-captions", action="store_true", help="skip transcription and captions")
     p.add_argument("--jumpcut", action="store_true",
                    help="cut out pauses longer than 0.5s inside each clip (captions are retimed to match)")
@@ -80,6 +81,9 @@ def main(argv: list[str] | None = None) -> int:
         return 2
     if url is not None and not download.available():
         print('error: links need yt-dlp: pip install "clipwright[link]"', file=sys.stderr)
+        return 2
+    if args.layout == "speaker" and not speaker.available():
+        print('error: --layout speaker needs OpenCV: pip install "clipwright[speaker]"', file=sys.stderr)
         return 2
     if args.copy and args.no_captions:
         print("error: --copy writes from the transcript, so it can't be used with --no-captions", file=sys.stderr)
