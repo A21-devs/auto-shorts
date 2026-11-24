@@ -13,7 +13,7 @@ from typing import Any
 
 import numpy as np
 
-from . import audio, jumpcut, scenes, segment, transcribe
+from . import audio, jumpcut, scenes, segment, subtitles, transcribe
 from .captions import CaptionStyle, build_ass
 from .probe import MediaInfo, probe
 from .render import RenderOptions, render
@@ -36,6 +36,8 @@ class Job:
     whisper_model: str = "small"
     language: str | None = None
     hop: float = 0.5
+    # existing subtitles to use instead of Whisper (also works when the audio track is silent)
+    srt: Path | None = None
 
 
 def _no_progress(_stage: str, _fraction: float) -> None:
@@ -69,7 +71,12 @@ def analyze(info: MediaInfo, job: Job, log: Log,
     progress("scenes", 1.0)
 
     words: list[transcribe.Word] = []
-    if job.captions and pcm is not None:
+    if job.captions and job.srt is not None:
+        words = subtitles.load_srt(job.srt)
+        log(f"using subtitles from {job.srt.name} ({len(words)} words), skipping whisper")
+        if not words:
+            log("warning: no subtitle cues found in that file, so no captions")
+    elif job.captions and pcm is not None:
         if transcribe.available():
             log(f"transcribing (whisper {job.whisper_model})")
             progress("transcribe", 0.0)

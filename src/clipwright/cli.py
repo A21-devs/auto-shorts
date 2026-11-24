@@ -11,6 +11,7 @@ from .pipeline import Job, run
 from .probe import ToolMissing
 from .render import RenderOptions
 from .segment import Options
+from .subtitles import sidecar
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -26,6 +27,9 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--no-captions", action="store_true", help="skip transcription and captions")
     p.add_argument("--jumpcut", action="store_true",
                    help="cut out pauses longer than 0.5s inside each clip (captions are retimed to match)")
+    p.add_argument("--srt", type=Path,
+                   help="use this subtitle file instead of transcribing (default: <video name>.srt next to the "
+                        "video, if there is one)")
     p.add_argument("--model", default="small", help="whisper model size (tiny, base, small, medium, large-v3)")
     p.add_argument("--language", help="force a language code like en (default: auto detect)")
     p.add_argument("--encoder", default="auto", help="auto, h264_nvenc or libx264")
@@ -66,6 +70,12 @@ def main(argv: list[str] | None = None) -> int:
     if args.min_len <= 0 or args.max_len < args.min_len:
         print("error: --min must be > 0 and --max must be >= --min", file=sys.stderr)
         return 2
+    srt = args.srt
+    if srt is not None and not srt.is_file():
+        print(f"error: {srt} not found", file=sys.stderr)
+        return 2
+    if srt is None and not args.no_captions:
+        srt = sidecar(args.video)
     job = Job(
         source=args.video,
         out_dir=args.out or args.video.with_name(f"{args.video.stem}_shorts"),
@@ -74,6 +84,7 @@ def main(argv: list[str] | None = None) -> int:
         captions=not args.no_captions,
         whisper_model=args.model,
         language=args.language,
+        srt=srt,
     )
     try:
         manifest = run(job)

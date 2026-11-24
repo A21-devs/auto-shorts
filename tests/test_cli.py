@@ -31,3 +31,10 @@ def test_stale_clips_removed_but_nothing_else(tmp_path: Path):
 def test_serve_rejects_bad_port(capsys):
     assert main(["serve", "--port", "70000"]) == 2
     assert "--port" in capsys.readouterr().err
+
+
+def test_missing_srt_is_rejected(tmp_path: Path, capsys):
+    video = tmp_path / "v.mp4"
+    video.write_bytes(b"not really a video")
+    assert main([str(video), "--srt", str(tmp_path / "nope.srt")]) == 2
+    assert "nope.srt" in capsys.readouterr().err
