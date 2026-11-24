@@ -109,3 +109,25 @@ def test_watch_runs_new_recordings_and_skips_done_ones(tmp_path: Path):
     assert handled == ["bad.mp4", "new.mkv"]  # each once, in name order, old.mp4 skipped
     assert "failed: bad.mp4: ffmpeg failed" in logs
     assert "new recording: new.mkv" in logs
+
+
+def test_watch_survives_the_folder_going_away(tmp_path: Path):
+    folder = tmp_path / "recordings"
+    folder.mkdir()
+    logs: list[str] = []
+    handled: list[str] = []
+    now = [0.0]
+
+    def sleep(s: float) -> None:
+        now[0] += s
+        if now[0] == 2:
+            folder.rename(tmp_path / "unplugged")
+        if now[0] == 10:
+            (tmp_path / "unplugged").rename(folder)
+            _bump(folder / "rec.mp4", b"x", 1_000)
+
+    watch(folder, lambda v: handled.append(v.name), settle=2, interval=1, log=logs.append,
+          stop=lambda: now[0] > 20, clock=lambda: now[0], sleep=sleep)
+    assert sum("waiting for it to come back" in m for m in logs) == 1  # said once, not every poll
+    assert any(m.endswith("is back") for m in logs)
+    assert handled == ["rec.mp4"]

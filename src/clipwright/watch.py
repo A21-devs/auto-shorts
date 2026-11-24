@@ -108,10 +108,23 @@ def watch(folder: Path, handle: Callable[[Path], None], settle: float = 10.0, in
           sleep: Callable[[float], None] = time.sleep) -> None:
     """Calls `handle(video)` for every finished recording in `folder` that has no manifest yet,
     one at a time, until `stop()` returns True. A failing recording is logged and skipped; it's
-    tried again only if the file changes."""
+    tried again only if the file changes. If the folder can't be read (an unplugged drive, a
+    synced folder that's offline) it says so once and keeps polling until it's back."""
     watcher = Watcher(folder, settle)
+    missing = False
     while not stop():
-        for video in watcher.poll(clock()):
+        try:
+            ready = watcher.poll(clock())
+        except OSError as e:
+            if not missing:
+                log(f"can't read {folder} ({e.strerror or e}), waiting for it to come back")
+                missing = True
+            sleep(interval)
+            continue
+        if missing:
+            log(f"{folder} is back")
+            missing = False
+        for video in ready:
             if already_done(video, out_dir_for(video, out_root)):
                 continue
             log(f"new recording: {video.name}")
