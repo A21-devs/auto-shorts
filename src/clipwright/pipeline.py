@@ -38,6 +38,8 @@ class Job:
     hop: float = 0.5
     # existing subtitles to use instead of Whisper (also works when the audio track is silent)
     srt: Path | None = None
+    # what the clips are cut for (platforms.PLATFORMS key), recorded in the manifest
+    platform: str | None = None
 
 
 def _no_progress(_stage: str, _fraction: float) -> None:
@@ -188,7 +190,8 @@ def run(job: Job, log: Log = print, progress: Progress = _no_progress) -> Path:
         progress("render", i / len(clips))
 
     manifest = out_dir / "manifest.json"
-    _write_manifest(manifest, {"source": str(info.path), "duration": info.duration, "render": asdict(job.render),
+    _write_manifest(manifest, {"source": str(info.path), "duration": info.duration, "platform": job.platform,
+                               "render": asdict(job.render),
                                "words": words_file, "clips": results})
     progress("done", 1.0)
     return manifest

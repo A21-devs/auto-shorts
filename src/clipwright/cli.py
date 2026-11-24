@@ -8,6 +8,7 @@ from pathlib import Path
 
 from . import __version__
 from .pipeline import Job, run
+from .platforms import PLATFORMS, lengths
 from .probe import ToolMissing
 from .render import RenderOptions
 from .segment import Options
@@ -19,8 +20,11 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("video", type=Path, help="input video file")
     p.add_argument("-o", "--out", type=Path, help="output folder (default: <video name>_shorts next to the video)")
     p.add_argument("-n", "--count", type=int, default=6, help="how many clips (default 6)")
-    p.add_argument("--min", dest="min_len", type=float, default=20, help="shortest clip in seconds (default 20)")
-    p.add_argument("--max", dest="max_len", type=float, default=55, help="longest clip in seconds (default 55)")
+    p.add_argument("--platform", choices=list(PLATFORMS),
+                   help="pick clip lengths for this platform: "
+                        + ", ".join(f"{k} {v.min_len:g}-{v.max_len:g}s" for k, v in PLATFORMS.items()))
+    p.add_argument("--min", dest="min_len", type=float, help="shortest clip in seconds (default 20, or the platform's)")
+    p.add_argument("--max", dest="max_len", type=float, help="longest clip in seconds (default 55, or the platform's)")
     p.add_argument("--layout", choices=["blur", "crop", "follow", "fit"], default="blur",
                    help="blur = video on a blurred background, crop = fill the frame, "
                         "follow = fill the frame and pan toward the action, fit = black bars")
@@ -67,6 +71,11 @@ def main(argv: list[str] | None = None) -> int:
     if args.count < 1:
         print("error: --count must be at least 1", file=sys.stderr)
         return 2
+    try:
+        args.min_len, args.max_len = lengths(args.platform, args.min_len, args.max_len)
+    except ValueError as e:
+        print(f"error: {e}", file=sys.stderr)
+        return 2
     if args.min_len <= 0 or args.max_len < args.min_len:
         print("error: --min must be > 0 and --max must be >= --min", file=sys.stderr)
         return 2
@@ -85,6 +94,7 @@ def main(argv: list[str] | None = None) -> int:
         whisper_model=args.model,
         language=args.language,
         srt=srt,
+        platform=args.platform,
     )
     try:
         manifest = run(job)

@@ -33,6 +33,10 @@ Everything is on a 0.5 second timeline:
 
 Every window between `--min` and `--max` seconds gets a score. Start and end points get snapped to silences or sentence ends so clips don't cut mid-word. Then the best non-overlapping windows are picked.
 
+## Platforms
+
+`--platform shorts|tiktok|reels` picks clip lengths that fit: Shorts 15-58s (hard limit 60), TikTok 15-60s (limit 3 min), Reels 15-60s (limit 90s). `--min`/`--max` still win, but a `--max` over the platform's limit is an error instead of an upload that gets rejected later. The platform is saved in `manifest.json`.
+
 ## Output
 
 For each clip:

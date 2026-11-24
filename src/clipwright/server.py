@@ -36,6 +36,7 @@ from typing import Any
 from urllib.parse import unquote
 
 from .pipeline import Job, mark_clip, rerender_clip, run
+from .platforms import lengths
 from .render import RenderOptions
 from .segment import Options
 from .subtitles import sidecar
@@ -112,8 +113,14 @@ def parse_job(body: dict[str, Any]) -> Job:
     count = _num(body, "count", 6, 1, 50)
     if count != int(count):
         raise BadRequest("count must be a whole number")
-    min_len = _num(body, "min", 20, 1, 600)
-    max_len = _num(body, "max", 55, 1, 600)
+    platform = body.get("platform")
+    if platform is not None and not isinstance(platform, str):
+        raise BadRequest("platform must be a string")
+    try:
+        min_len, max_len = lengths(platform, _num(body, "min", 0, 1, 600) if "min" in body else None,
+                                   _num(body, "max", 0, 1, 600) if "max" in body else None)
+    except ValueError as e:
+        raise BadRequest(str(e)) from None
     if max_len < min_len:
         raise BadRequest("max must be >= min")
     layout = body.get("layout", "blur")
@@ -139,6 +146,7 @@ def parse_job(body: dict[str, Any]) -> Job:
         captions=captions,
         whisper_model=model,
         srt=sidecar(src) if captions else None,
+        platform=platform,
     )
 
 

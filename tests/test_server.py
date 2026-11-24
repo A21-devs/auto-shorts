@@ -92,6 +92,14 @@ def test_parse_job_defaults(video: Path):
     assert parse_job({"video": str(video), "jumpcut": True}).render.jumpcut
 
 
+def test_parse_job_platform(video: Path):
+    job = parse_job({"video": str(video), "platform": "shorts"})
+    assert (job.clips.min_len, job.clips.max_len, job.platform) == (15, 58, "shorts")
+    # the form always sends min and max, those win over the preset
+    job = parse_job({"video": str(video), "platform": "tiktok", "min": 30, "max": 90})
+    assert (job.clips.min_len, job.clips.max_len) == (30, 90)
+
+
 @pytest.mark.parametrize(("patch", "msg"), [
     ({"video": None}, "video must be"),
     ({"video": "nope.mp4"}, "not found"),
@@ -104,6 +112,9 @@ def test_parse_job_defaults(video: Path):
     ({"jumpcut": 1}, "jumpcut"),
     ({"model": "../../evil"}, "model"),
     ({"out": 5}, "out"),
+    ({"platform": "myspace"}, "unknown platform"),
+    ({"platform": 3}, "platform must be"),
+    ({"platform": "shorts", "max": 90}, "at most 60s"),
 ])
 def test_parse_job_rejects(video: Path, patch: dict[str, Any], msg: str):
     with pytest.raises(BadRequest, match=msg):

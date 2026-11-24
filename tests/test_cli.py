@@ -38,3 +38,10 @@ def test_missing_srt_is_rejected(tmp_path: Path, capsys):
     video.write_bytes(b"not really a video")
     assert main([str(video), "--srt", str(tmp_path / "nope.srt")]) == 2
     assert "nope.srt" in capsys.readouterr().err
+
+
+def test_platform_max_over_limit(tmp_path: Path, capsys):
+    video = tmp_path / "v.mp4"
+    video.write_bytes(b"not really a video")
+    assert main([str(video), "--platform", "shorts", "--max", "90"]) == 2
+    assert "at most 60s" in capsys.readouterr().err

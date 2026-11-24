@@ -1,0 +1,47 @@
+"""Clip length presets per platform, so nobody has to remember each one's limits.
+
+`limit` is the platform's hard maximum. `min_len`/`max_len` are the defaults clipwright picks
+clips with: a bit under the limit, because jump cuts and re-renders only ever make a clip
+shorter, and an upload that is 0.1s too long gets rejected (Shorts) or posted as a normal
+video.
+"""
+
+from __future__ import annotations
+
+from dataclasses import dataclass
+
+
+@dataclass(frozen=True)
+class Platform:
+    name: str
+    min_len: float
+    max_len: float
+    limit: float
+
+
+PLATFORMS: dict[str, Platform] = {
+    "shorts": Platform("YouTube Shorts", 15, 58, 60),
+    "tiktok": Platform("TikTok", 15, 60, 180),  # can go to 3 min, but 15-60s is what does well
+    "reels": Platform("Instagram Reels", 15, 60, 90),
+}
+
+DEFAULT_MIN = 20.0
+DEFAULT_MAX = 55.0
+
+
+def lengths(platform: str | None, min_len: float | None, max_len: float | None) -> tuple[float, float]:
+    """Clip length range from an optional preset plus optional explicit values (which win).
+
+    Raises ValueError for an unknown platform, or a --max over the platform's hard limit."""
+    if platform is None:
+        return (DEFAULT_MIN if min_len is None else min_len, DEFAULT_MAX if max_len is None else max_len)
+    p = PLATFORMS.get(platform)
+    if p is None:
+        raise ValueError(f"unknown platform {platform!r}, pick one of {', '.join(PLATFORMS)}")
+    lo = p.min_len if min_len is None else min_len
+    hi = p.max_len if max_len is None else max_len
+    if hi > p.limit:
+        raise ValueError(f"{p.name} clips can be at most {p.limit:g}s, --max {hi:g} is over that")
+    if max_len is None and lo > hi:
+        hi = min(lo, p.limit)  # only --min given and it's above the preset's max: stretch the max to fit
+    return lo, hi
