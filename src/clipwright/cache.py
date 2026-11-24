@@ -17,6 +17,7 @@ disk) is skipped. It's an optimisation, never a reason to fail a run.
 
 from __future__ import annotations
 
+import contextlib
 import json
 import os
 import threading
@@ -61,7 +62,8 @@ class AnalysisCache:
         """The saved cache if it's readable and belongs to the video as it is now."""
         path = self.path
         if not path.exists() and path == cache_path(self.source):
-            # analysis saved by autoshorts is still good, it gets written back under the new name
+            # analysis saved by autoshorts is still good. The next save that changes something
+            # writes it under the new name and removes the old file.
             old = legacy_cache_path(self.source)
             if old.exists():
                 path = old
@@ -160,6 +162,10 @@ class AnalysisCache:
         except OSError:
             tmp.unlink(missing_ok=True)
             return False
+        if self.path == cache_path(self.source):
+            # everything from the old file was merged into the new one above
+            with contextlib.suppress(OSError):
+                legacy_cache_path(self.source).unlink(missing_ok=True)
         self.data = merged
         self._changed.clear()
         return True

@@ -135,3 +135,4 @@ def test_reads_a_cache_saved_under_the_old_name(video: Path):
     assert again.save()
     # written back under the new name, with the old sections kept
     assert json.loads(cache_path(video).read_text(encoding="utf-8"))["cuts"]
+    assert not video.with_name("game.mp4.autoshorts.json").exists()
