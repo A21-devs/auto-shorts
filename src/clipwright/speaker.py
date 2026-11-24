@@ -171,7 +171,8 @@ def read_faces(path: Path, video_stream: int, width: int, height: int, start: fl
 
 # --- who to show -------------------------------------------------------------------------------
 
-MIN_PRESENCE = 0.3  # a face position seen in fewer frames than this is a false hit or a passer-by
+MIN_PRESENCE = 0.3  # a face position seen in fewer frames than this is a false hit or a passer-by...
+MIN_SEEN = 2.0      # ...unless it's there for this many seconds (a short wide shot in an edited podcast)
 TRACK_GAP = 0.08    # face centres further apart than this (fraction of width) are different people
 TALKING = 2.0       # mean mouth activity above which someone counts as talking
 LEAD = 1.5          # ...and they have to beat the next person by this factor
@@ -187,9 +188,14 @@ class Track:
     presence: float  # share of frames with this face in them
 
 
-def tracks(faces: Faces, min_presence: float = MIN_PRESENCE, gap: float = TRACK_GAP) -> list[Track]:
+def tracks(faces: Faces, min_presence: float = MIN_PRESENCE, gap: float = TRACK_GAP,
+           min_seen: float = MIN_SEEN) -> list[Track]:
     """Groups face centres into people, left to right. Podcast cameras are static and people stay
-    in their seat, so 1-D clustering on the centre is enough: sort, split at gaps."""
+    in their seat, so 1-D clustering on the centre is enough: sort, split at gaps.
+
+    A position counts as a person when it's in `min_presence` of the frames or seen for
+    `min_seen` seconds. The relative bar alone dropped both people from a 4 s wide shot followed
+    by 14 s of close-ups; the absolute one still drops the single-frame false hits on gameplay."""
     seen = sorted((f.centre, f.area, i) for i, frame in enumerate(faces.frames) for f in frame)
     if not seen:
         return []
@@ -200,8 +206,9 @@ def tracks(faces: Faces, min_presence: float = MIN_PRESENCE, gap: float = TRACK_
         groups[-1].append(item)
     out = []
     for g in groups:
-        presence = len({i for _, _, i in g}) / len(faces.frames)
-        if presence >= min_presence:
+        frames_seen = len({i for _, _, i in g})
+        presence = frames_seen / len(faces.frames)
+        if presence >= min_presence or frames_seen >= min_seen * faces.fps:
             out.append(Track(g[0][0], g[-1][0], float(np.median([c for c, _, _ in g])),
                              float(np.median([a for _, a, _ in g])), presence))
     return out

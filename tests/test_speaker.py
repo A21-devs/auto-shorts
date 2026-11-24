@@ -133,6 +133,19 @@ def test_tracks_group_faces_and_drop_rare_hits():
     assert tracks(Faces(5.0, [[], []])) == []
 
 
+def test_short_wide_shot_keeps_its_people():
+    # edited podcast: 4 s wide shot (left talking), then a 14 s close-up of the left person
+    wide = [[_face(0.25, 15.0, 0.08), _face(0.75, 0.3, 0.08)]] * 20
+    close = [[_face(0.5, 15.0, 0.3)]] * 70
+    f = Faces(5.0, wide + close)
+    assert [round(t.centre, 2) for t in tracks(f)] == [0.25, 0.5, 0.75]
+    keys = speaker_path(f, window=0.32)
+    assert keys == [(0.0, 0.25), (4.0, 0.25), (4.0, 0.5), (18.0, 0.5)]
+    # a face seen for under 2 s and under 30% of the time is still dropped
+    f.frames[30] = f.frames[30] + [_face(0.9, 30.0)]
+    assert len(tracks(f)) == 3
+
+
 def test_talking_scores_per_second():
     scores = talking(_podcast("LR"), tracks(_podcast("LR")))
     assert scores[0][0] > 10 > scores[0][1]
