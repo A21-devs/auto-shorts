@@ -37,17 +37,38 @@ def split_cue(start: float, end: float, text: str) -> list[Word]:
     return words
 
 
+def _norm(line: str) -> str:
+    return " ".join(_TAG.sub("", line).split()).lower()
+
+
+def _drop_repeated(previous: list[str], body: list[str]) -> list[str]:
+    """Lines of this cue minus the ones carried over from the previous cue.
+
+    YouTube auto-captions roll: each cue repeats the last line(s) of the one before and adds a
+    new line. Without this every word would be captioned (and counted as speech) twice."""
+    prev = [_norm(t) for t in previous]
+    cur = [_norm(t) for t in body]
+    for k in range(min(len(prev), len(cur)), 0, -1):
+        if prev[-k:] == cur[:k]:
+            return body[k:]
+    return body
+
+
 def parse_srt(text: str) -> list[Word]:
     """Words from SRT text. Blocks without a valid timing line are skipped, not fatal."""
     text = text.lstrip("﻿").replace("\r\n", "\n").replace("\r", "\n")
     words: list[Word] = []
+    previous: list[str] = []
     for block in re.split(r"\n\s*\n", text):
         lines = block.strip().split("\n")
         for i, line in enumerate(lines):
             m = _CUE.search(line)
             if m:
                 g = m.groups()
-                words += split_cue(_seconds(*g[:4]), _seconds(*g[4:]), " ".join(lines[i + 1:]))
+                body = [t for t in lines[i + 1:] if _TAG.sub("", t).strip()]
+                new = _drop_repeated(previous, body)
+                words += split_cue(_seconds(*g[:4]), _seconds(*g[4:]), " ".join(new))
+                previous = body
                 break
     words.sort(key=lambda w: w.start)
     return words

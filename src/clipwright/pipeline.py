@@ -76,6 +76,9 @@ def analyze(info: MediaInfo, job: Job, log: Log,
         log(f"using subtitles from {job.srt.name} ({len(words)} words), skipping whisper")
         if not words:
             log("warning: no subtitle cues found in that file, so no captions")
+        elif words[-1].end > info.duration + 5:
+            log(f"warning: the subtitles run to {words[-1].end:.0f}s but the video is {info.duration:.0f}s long, "
+                "they may be for a different version of it")
     elif job.captions and pcm is not None:
         if transcribe.available():
             log(f"transcribing (whisper {job.whisper_model})")
