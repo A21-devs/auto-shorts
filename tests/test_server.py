@@ -428,3 +428,61 @@ def test_one_edit_at_a_time(srv, video: Path, monkeypatch: pytest.MonkeyPatch):
         finish.set()
         t.join(5)
     assert results == [200]
+
+
+def test_parse_job_link(monkeypatch: pytest.MonkeyPatch):
+    from clipwright import download
+    monkeypatch.setattr(download, "available", lambda: True)
+    job = parse_job({"video": " https://www.youtube.com/watch?v=abc ", "platform": "shorts"})
+    assert job.url == "https://www.youtube.com/watch?v=abc"
+    assert job.out_dir is None and job.srt is None  # both depend on what gets downloaded
+    monkeypatch.setattr(download, "available", lambda: False)
+    with pytest.raises(BadRequest, match=r"clipwright\[link\]"):
+        parse_job({"video": "https://www.youtube.com/watch?v=abc"})
+
+
+def fake_link_download(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> list[str | None]:
+    from clipwright import download
+    langs: list[str | None] = []
+
+    def fetch(url: str, folder: Path, log: Any, on_progress: Any, subtitles: str | None) -> Path:
+        langs.append(subtitles)
+        on_progress(0.5)
+        folder.mkdir(parents=True, exist_ok=True)
+        video = folder / "my clip [abc].mp4"
+        video.write_bytes(b"video")
+        (folder / "my clip [abc].srt").write_text("1\n00:00:00,000 --> 00:00:01,000\nhi\n")
+        return video
+
+    monkeypatch.setattr(download, "available", lambda: True)
+    monkeypatch.setattr(download, "download", fetch)
+    monkeypatch.setattr(server, "run", fake_run)
+    return langs
+
+
+def test_link_job_downloads_then_runs(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
+    langs = fake_link_download(tmp_path, monkeypatch)
+    app = App(downloads=tmp_path / "dl")
+    job = parse_job({"video": "https://x.test/v"})
+    st = server.JobState(id="j1", video=job.url or "", out_dir=None, job=job)
+    app.jobs[st.id] = st
+    app.execute(st)
+    assert st.state == "done", st.error
+    assert langs == ["en"]
+    assert st.video == str(tmp_path / "dl" / "my clip [abc].mp4")
+    assert st.out_dir == tmp_path / "dl" / "my clip [abc]_shorts"
+    assert st.job.srt == tmp_path / "dl" / "my clip [abc].srt"
+    assert "download" in st.stages
+    assert st.to_json()["out_dir"] == str(st.out_dir)
+
+
+def test_link_job_refuses_a_folder_that_is_busy(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
+    fake_link_download(tmp_path, monkeypatch)
+    app = App(downloads=tmp_path / "dl")
+    other = server.JobState(id="busy", video="x", out_dir=tmp_path / "dl" / "my clip [abc]_shorts",
+                            job=Job(source=Path("x")), state="running")
+    app.jobs[other.id] = other
+    st = server.JobState(id="j2", video="https://x.test/v", out_dir=None, job=parse_job({"video": "https://x.test/v"}))
+    app.jobs[st.id] = st
+    app.execute(st)
+    assert st.state == "error" and "still writing" in (st.error or "")

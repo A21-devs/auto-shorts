@@ -72,7 +72,7 @@ If there's a `talk.srt` next to `talk.mp4` it's used instead of Whisper, which s
 clipwright serve
 ```
 
-Open http://127.0.0.1:8765/, paste the path of a video and hit Make shorts. It shows progress while it works, then every clip with its score and why it was picked. The server only listens on your own machine.
+Open http://127.0.0.1:8765/, paste the path of a video (or a link, with `clipwright[link]` installed) and hit Make shorts. Links are downloaded to `Videos/clipwright` unless you start it with `--downloads DIR`. It shows progress while it works, then every clip with its score and why it was picked. The server only listens on your own machine.
 
 Before 0.2 this was called **clipwright**. The `clipwright` command still works, and analysis cached by the old name is picked up.
 

@@ -71,8 +71,8 @@
 <main>
   <h1>clipwright</h1>
   <form id="new-job">
-    <label class="wide">Video file
-      <input type="text" name="video" required placeholder="C:\Videos\my stream.mp4" autocomplete="off">
+    <label class="wide">Video file or link
+      <input type="text" name="video" required placeholder="C:\Videos\my stream.mp4 or https://www.youtube.com/watch?v=..." autocomplete="off">
     </label>
     <label>Clips <input type="number" name="count" value="6" min="1" max="50"></label>
     <label>For
@@ -123,7 +123,7 @@
 // Rough share of the total time each stage takes on a typical run, for one overall bar.
 const WEIGHTS = { audio: 0.05, scenes: 0.1, transcribe: 0.45, render: 0.4 };
 const ORDER = ["audio", "scenes", "transcribe", "render"];
-const LABELS = { audio: "reading audio", scenes: "finding scene cuts", transcribe: "transcribing",
+const LABELS = { download: "downloading", audio: "reading audio", scenes: "finding scene cuts", transcribe: "transcribing",
                  render: "rendering clips", done: "done" };
 
 const $ = (id) => document.getElementById(id);
@@ -170,8 +170,12 @@ function renderStatus(job) {
   const label = job.state === "queued" ? "waiting for the job before it"
     : job.state === "error" ? "failed"
     : LABELS[job.stage] || job.stage || "starting";
-  const pct = Math.round(overall(job.stage, job.fraction, job.stages) * 100);
-  $("status-line").textContent = `${job.video} - ${label}${job.state === "running" ? ` (${pct}%)` : ""}`;
+  // the download's percent goes in the label only: how long it takes says nothing about the rest
+  // of the job, and on the bar it would fill to 100% and then drop back to 0 when analysis starts
+  const downloading = job.stage === "download";
+  const pct = downloading ? 0 : Math.round(overall(job.stage, job.fraction, job.stages) * 100);
+  const shown = downloading ? Math.round(job.fraction * 100) : pct;
+  $("status-line").textContent = `${job.video} - ${label}${job.state === "running" ? ` (${shown}%)` : ""}`;
   $("bar").style.width = `${job.state === "done" ? 100 : pct}%`;
   $("error").textContent = job.error || "";
   $("log").textContent = job.log.join("\n");
