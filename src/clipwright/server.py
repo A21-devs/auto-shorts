@@ -27,7 +27,7 @@ import time
 import traceback
 import uuid
 from collections import deque
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from functools import partial
 from http import HTTPStatus
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
@@ -35,6 +35,7 @@ from pathlib import Path
 from typing import Any
 from urllib.parse import unquote
 
+from . import download
 from .pipeline import Job, mark_clip, rerender_clip, run
 from .platforms import lengths
 from .render import RenderOptions
@@ -61,8 +62,8 @@ class FolderBusy(RuntimeError):
 @dataclass
 class JobState:
     id: str
-    video: Path
-    out_dir: Path
+    video: str  # the file, or the link until it's downloaded
+    out_dir: Path | None  # None until a link is downloaded and the default folder is known
     job: Job
     created: float = field(default_factory=time.time)
     state: str = "queued"  # queued | running | done | error
@@ -86,7 +87,8 @@ class JobState:
 
     def to_json(self, log_lines: int = 50) -> dict[str, Any]:
         return {
-            "id": self.id, "video": str(self.video), "out_dir": str(self.out_dir), "created": self.created,
+            "id": self.id, "video": self.video, "out_dir": str(self.out_dir) if self.out_dir else None,
+            "created": self.created,
             "state": self.state, "stage": self.stage, "fraction": round(self.fraction, 4),
             "stages": list(self.stages),
             "error": self.error, "log": list(self.log)[-log_lines:] if log_lines else [],
@@ -105,11 +107,18 @@ def parse_job(body: dict[str, Any]) -> Job:
     """Validates a POST /api/jobs body into a Job. Same defaults and limits as the CLI."""
     video = body.get("video")
     if not isinstance(video, str) or not video.strip():
-        raise BadRequest("video must be a path to a video file")
+        raise BadRequest("video must be a path to a video file or a link")
     # people paste paths straight from Explorer's "Copy as path", which adds quotes
-    src = Path(video.strip().strip('"')).expanduser().resolve()
-    if not src.is_file():
-        raise BadRequest(f"{src} not found")
+    text = video.strip().strip('"')
+    url = text if download.is_url(text) else None
+    if url is not None:
+        if not download.available():
+            raise BadRequest('links need yt-dlp: pip install "clipwright[link]"')
+        src = Path()  # filled in by App.execute once it's downloaded
+    else:
+        src = Path(text).expanduser().resolve()
+        if not src.is_file():
+            raise BadRequest(f"{src} not found")
     count = _num(body, "count", 6, 1, 50)
     if count != int(count):
         raise BadRequest("count must be a whole number")
@@ -138,15 +147,19 @@ def parse_job(body: dict[str, Any]) -> Job:
     out = body.get("out")
     if out is not None and not isinstance(out, str):
         raise BadRequest("out must be a folder path")
+    out_dir = Path(out).expanduser().resolve() if out else None
+    if out_dir is None and url is None:
+        out_dir = src.with_name(f"{src.stem}_shorts")
     return Job(
         source=src,
-        out_dir=Path(out).expanduser().resolve() if out else src.with_name(f"{src.stem}_shorts"),
+        out_dir=out_dir,
         clips=Options(count=int(count), min_len=min_len, max_len=max_len),
         render=RenderOptions(layout=layout, jumpcut=jump),
         captions=captions,
         whisper_model=model,
-        srt=sidecar(src) if captions else None,
+        srt=sidecar(src) if captions and url is None else None,
         platform=platform,
+        url=url,
     )
 
 
@@ -154,7 +167,9 @@ class App:
     """Job registry plus one worker thread. Jobs run one at a time: two whisper models and two
     ffmpeg encodes fighting over the same GPU is slower than doing them in order."""
 
-    def __init__(self) -> None:
+    def __init__(self, downloads: Path | None = None) -> None:
+        # where pasted links are downloaded to
+        self.downloads = downloads or Path.home() / "Videos" / "clipwright"
         self.jobs: dict[str, JobState] = {}
         self._lock = threading.Lock()  # submit() runs on request threads
         self._queue: queue.Queue[JobState] = queue.Queue()
@@ -164,19 +179,40 @@ class App:
     def submit(self, job: Job) -> JobState:
         """Queues a job. Raises FolderBusy if a queued or running job already writes to the same folder.
         Finished jobs in that folder get `superseded_by`, since the new run will overwrite their clips."""
-        folder = job.out_dir.resolve()
         with self._lock:
-            same = [s for s in self.jobs.values() if s.out_dir.resolve() == folder]
-            # a finished job holding its lock is in the middle of re-rendering a clip into this folder
-            busy = next((s for s in same if s.state in ("queued", "running") or s.lock.locked()), None)
-            if busy:
-                raise FolderBusy(f"job {busy.id} is still writing to {folder}")
-            st = JobState(id=uuid.uuid4().hex[:12], video=job.source, out_dir=job.out_dir, job=job)
-            for old in same:
-                old.superseded_by = st.id
+            st = JobState(id=uuid.uuid4().hex[:12], video=job.url or str(job.source), out_dir=job.out_dir, job=job)
+            # a link's folder is only known after the download, execute() checks it then
+            if job.out_dir is not None:
+                self._claim(st, job.out_dir)
             self.jobs[st.id] = st
         self._queue.put(st)
         return st
+
+    def _claim(self, st: JobState, out_dir: Path) -> None:
+        """Makes out_dir st's folder. Call with self._lock held. Raises FolderBusy if a queued or
+        running job (other than st) already writes there; finished ones there get `superseded_by`."""
+        folder = out_dir.resolve()
+        same = [s for s in self.jobs.values() if s is not st and s.out_dir and s.out_dir.resolve() == folder]
+        # a finished job holding its lock is in the middle of re-rendering a clip into this folder
+        busy = next((s for s in same if s.state in ("queued", "running") or s.lock.locked()), None)
+        if busy:
+            raise FolderBusy(f"job {busy.id} is still writing to {folder}")
+        for old in same:
+            old.superseded_by = st.id
+        st.out_dir = out_dir
+
+    def _fetch(self, st: JobState) -> None:
+        """Downloads a link job's video and fills in its source, subtitles and output folder."""
+        job = st.job
+        assert job.url is not None
+        lang = (job.language or "en") if job.captions else None
+        path = download.download(job.url, self.downloads, log=st.add_log,
+                                 on_progress=lambda f: st.set_progress("download", f), subtitles=lang)
+        out_dir = job.out_dir or path.with_name(f"{path.stem}_shorts")
+        with self._lock:
+            self._claim(st, out_dir)
+        st.video = str(path)
+        st.job = replace(job, source=path, out_dir=out_dir, srt=sidecar(path) if job.captions else None)
 
     def begin_edit(self, st: JobState, wait: float = 0.0) -> None:
         """Takes st.lock for a clip edit, waiting up to `wait` seconds, or raises FolderBusy.
@@ -201,6 +237,8 @@ class App:
     def execute(self, st: JobState) -> None:
         st.state = "running"
         try:
+            if st.job.url is not None and not st.job.source.is_file():
+                self._fetch(st)
             with st.lock:
                 manifest = run(st.job, log=st.add_log, progress=st.set_progress)
                 st.manifest = json.loads(manifest.read_text(encoding="utf-8"))
@@ -304,12 +342,13 @@ class Handler(BaseHTTPRequestHandler):
         if not re.fullmatch(r"[0-9]{1,6}", number):
             raise _HttpError(HTTPStatus.NOT_FOUND, "no such clip")
         body = self._read_json()
-        if st.state != "done":
+        if st.state != "done" or st.out_dir is None:
             raise _HttpError(HTTPStatus.CONFLICT, "the job isn't finished")
+        out_dir = st.out_dir
         if "keep" in body:
             if body["keep"] is not None and not isinstance(body["keep"], bool):
                 raise _HttpError(HTTPStatus.BAD_REQUEST, "keep must be true, false or null")
-            action = partial(mark_clip, st.out_dir / "manifest.json", int(number), body["keep"])
+            action = partial(mark_clip, out_dir / "manifest.json", int(number), body["keep"])
             # marking takes milliseconds, so clicking Keep on one clip right after another just queues up.
             # During a re-render (seconds) it still gives up and says busy.
             wait = KEEP_WAIT
@@ -318,7 +357,7 @@ class Handler(BaseHTTPRequestHandler):
             if not all(isinstance(v, int | float) and not isinstance(v, bool) and math.isfinite(v)
                        for v in (start, end)):
                 raise _HttpError(HTTPStatus.BAD_REQUEST, "start and end must be numbers of seconds")
-            action = partial(rerender_clip, st.out_dir / "manifest.json", int(number), start, end, log=st.add_log)
+            action = partial(rerender_clip, out_dir / "manifest.json", int(number), start, end, log=st.add_log)
             wait = 0.0
         else:
             raise _HttpError(HTTPStatus.BAD_REQUEST, 'send {"keep": ...} or {"start": ..., "end": ...}')
@@ -328,7 +367,7 @@ class Handler(BaseHTTPRequestHandler):
             raise _HttpError(HTTPStatus.CONFLICT, str(e)) from None
         try:
             action()
-            st.manifest = json.loads((st.out_dir / "manifest.json").read_text(encoding="utf-8"))
+            st.manifest = json.loads((out_dir / "manifest.json").read_text(encoding="utf-8"))
         except ValueError as e:
             raise _HttpError(HTTPStatus.BAD_REQUEST, str(e)) from None
         except Exception as e:  # ffmpeg failures and the like, the old clip is still there
@@ -362,6 +401,8 @@ class Handler(BaseHTTPRequestHandler):
     def _send_file(self, st: JobState, name: str) -> None:
         # one plain file name inside the output folder, nothing else
         if "/" in name or "\\" in name or ":" in name or name in {"", ".", ".."}:
+            raise _HttpError(HTTPStatus.NOT_FOUND, "no such file")
+        if st.out_dir is None:
             raise _HttpError(HTTPStatus.NOT_FOUND, "no such file")
         f = st.out_dir / name
         if not f.is_file() or f.resolve().parent != st.out_dir.resolve():
@@ -431,8 +472,8 @@ def make_server(host: str = "127.0.0.1", port: int = 8765, app: App | None = Non
     return server
 
 
-def serve(host: str = "127.0.0.1", port: int = 8765) -> None:
-    server = make_server(host, port)
+def serve(host: str = "127.0.0.1", port: int = 8765, downloads: Path | None = None) -> None:
+    server = make_server(host, port, App(downloads))
     print(f"clipwright is running at http://{host}:{server.server_address[1]}/  (Ctrl+C to stop)", flush=True)
     try:
         server.serve_forever()

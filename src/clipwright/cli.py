@@ -46,6 +46,7 @@ def build_parser() -> argparse.ArgumentParser:
 def serve_main(argv: list[str]) -> int:
     p = argparse.ArgumentParser(prog="clipwright serve", description="Run the local review server.")
     p.add_argument("--port", type=int, default=8765, help="port on 127.0.0.1 (default 8765, 0 = any free port)")
+    p.add_argument("--downloads", type=Path, help="where pasted links are downloaded to (default: Videos/clipwright)")
     args = p.parse_args(argv)
     if not 0 <= args.port <= 65535:
         print("error: --port must be between 0 and 65535", file=sys.stderr)
@@ -53,7 +54,7 @@ def serve_main(argv: list[str]) -> int:
     from .server import serve  # keeps http.server out of the normal CLI path
 
     try:
-        serve(port=args.port)
+        serve(port=args.port, downloads=args.downloads)
     except OSError as e:
         print(f"error: can't listen on port {args.port}: {e}", file=sys.stderr)
         return 2
@@ -102,7 +103,7 @@ def main(argv: list[str] | None = None) -> int:
         srt = sidecar(args.video)
     job = Job(
         source=args.video,
-        out_dir=args.out or args.video.with_name(f"{args.video.stem}_shorts"),
+        out_dir=args.out,
         clips=Options(count=args.count, min_len=args.min_len, max_len=args.max_len),
         render=RenderOptions(layout=args.layout, encoder=args.encoder, jumpcut=args.jumpcut),
         captions=not args.no_captions,
@@ -110,6 +111,7 @@ def main(argv: list[str] | None = None) -> int:
         language=args.language,
         srt=srt,
         platform=args.platform,
+        url=url,
     )
     try:
         manifest = run(job)

@@ -29,7 +29,8 @@ MIN_CLIP = 1.0  # shortest range rerender_clip accepts, in seconds
 @dataclass
 class Job:
     source: Path
-    out_dir: Path
+    # None: <video name>_shorts next to the video
+    out_dir: Path | None = None
     clips: segment.Options = field(default_factory=segment.Options)
     render: RenderOptions = field(default_factory=RenderOptions)
     captions: bool = True
@@ -40,6 +41,8 @@ class Job:
     srt: Path | None = None
     # what the clips are cut for (platforms.PLATFORMS key), recorded in the manifest
     platform: str | None = None
+    # the link the source was downloaded from, kept in the manifest
+    url: str | None = None
 
 
 def _no_progress(_stage: str, _fraction: float) -> None:
@@ -160,7 +163,7 @@ def run(job: Job, log: Log = print, progress: Progress = _no_progress) -> Path:
     if not clips:
         raise RuntimeError("no clips found, is the video shorter than --min?")
 
-    out_dir = job.out_dir
+    out_dir = job.out_dir or info.path.with_name(f"{info.path.stem}_shorts")
     out_dir.mkdir(parents=True, exist_ok=True)
     stem = info.path.stem
     removed = remove_stale_clips(out_dir, stem, keep=len(clips))
@@ -191,6 +194,7 @@ def run(job: Job, log: Log = print, progress: Progress = _no_progress) -> Path:
 
     manifest = out_dir / "manifest.json"
     _write_manifest(manifest, {"source": str(info.path), "duration": info.duration, "platform": job.platform,
+                               "url": job.url,
                                "render": asdict(job.render),
                                "words": words_file, "clips": results})
     progress("done", 1.0)
