@@ -53,6 +53,15 @@ Layouts (`--layout`):
 
 `--jumpcut` cuts pauses longer than half a second out of each clip, keeping 0.1s on each side so words aren't clipped. Captions are retimed to match. A pause is anything 25 dB under the clip's loud parts, so constant game audio is left alone.
 
+## Links
+
+```bash
+pip install "clipwright[link] @ git+https://github.com/A21-devs/clipwright"
+clipwright "https://www.youtube.com/watch?v=..." -n 6 --platform shorts
+```
+
+Anything [yt-dlp](https://github.com/yt-dlp/yt-dlp) can download works (YouTube, Twitch VODs, Kick, ...). It's saved as `<title> [<id>].mp4` in the current folder (or `--downloads DIR`), capped at 1080p, and pasting the same link again reuses the file. The video's subtitles come along as `<title> [<id>].srt` when there are any, so Whisper is skipped.
+
 ## Already have subtitles?
 
 If there's a `talk.srt` next to `talk.mp4` it's used instead of Whisper, which skips the slowest step. Or point at one with `--srt path/to/file.srt`. SRT only has timings per line, so each line's time is spread over its words by length for the word highlight.
