@@ -35,6 +35,8 @@ def test_pipeline_finds_the_loud_part_and_renders_vertical(tmp_path: Path):
     assert clip["start"] <= 45 and clip["end"] >= 50
     assert manifest["render"]["encoder"] == "libx264"
     assert manifest["words"] is None
+    cover = probe(tmp_path / "out" / clip["thumbnail"])
+    assert (cover.width, cover.height) == (720, 1280)
 
     out = probe(tmp_path / "out" / clip["file"])
     assert (out.width, out.height) == (1080, 1920)

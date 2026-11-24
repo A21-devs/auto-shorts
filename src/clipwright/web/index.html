@@ -241,6 +241,7 @@ function clipCard(job, manifest, clip, n) {
   // the file name stays the same after a re-render, so make the URL change with the times
   const src = `${fileUrl(job.id, clip.file)}?t=${clip.start}-${clip.end}`;
   video.src = src;
+  if (clip.thumbnail) video.poster = `${fileUrl(job.id, clip.thumbnail)}?t=${clip.start}-${clip.end}`;
 
   const meta = el("div", "meta");
   const times = el("div", "times");
@@ -319,7 +320,7 @@ function clipCard(job, manifest, clip, n) {
   showTimes();
   // the files to upload: the clip, and its captions as a separate .srt for platforms that take one
   const files = el("div", "files");
-  for (const [label, name] of [["mp4", clip.file], ["srt", clip.srt]]) {
+  for (const [label, name] of [["mp4", clip.file], ["srt", clip.srt], ["cover", clip.thumbnail]]) {
     if (!name) continue;
     const a = el("a", null, `download ${label}`);
     a.href = fileUrl(job.id, name);
