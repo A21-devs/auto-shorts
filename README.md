@@ -98,6 +98,15 @@ Before 0.2 this was called **clipwright**. The `clipwright` command still works,
 
 Before 0.2 this was called **auto-shorts**. The `autoshorts` command still works, and analysis cached under the old name is picked up.
 
+## Use it from an AI agent (MCP)
+
+```
+pip install "clipwright[mcp]"
+claude mcp add clipwright -- clipwright mcp
+```
+
+`clipwright mcp` is an MCP server over stdio, so Claude Code, Claude Desktop and other MCP clients can run it. Tools: `make_clips(video, count, platform, layout, captions, jumpcut, model, out)` runs a job on a local file and returns the clips, and `list_clips(manifest)` reads a finished run. Same limits as the review page. Links aren't supported over MCP yet.
+
 ## Install
 
 Needs Python 3.12+ and [ffmpeg](https://ffmpeg.org/) on your PATH.

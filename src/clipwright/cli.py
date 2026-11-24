@@ -160,12 +160,16 @@ def watch_main(argv: list[str]) -> int:
 
 def main(argv: list[str] | None = None) -> int:
     argv = sys.argv[1:] if argv is None else argv
-    # `serve` and `watch` are subcommands, everything else is the original `clipwright video.mp4 ...`
-    # form. A video literally named "serve" or "watch" can still be passed as ./serve.
+    # `serve`, `watch` and `mcp` are subcommands, everything else is the original
+    # `clipwright video.mp4 ...` form. A video literally named "serve" can still be passed as ./serve.
     if argv[:1] == ["serve"]:
         return serve_main(argv[1:])
     if argv[:1] == ["watch"]:
         return watch_main(argv[1:])
+    if argv[:1] == ["mcp"]:
+        from .mcp_server import main as mcp_main  # keeps the MCP SDK out of the normal CLI path
+
+        return mcp_main()
     args = build_parser().parse_args(argv)
     url = args.video if download.is_url(args.video) else None
     args.video = Path(args.video)
