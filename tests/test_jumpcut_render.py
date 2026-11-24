@@ -35,7 +35,8 @@ def test_jumpcut_removes_the_pauses_and_keeps_av_in_sync(tmp_path: Path):
 
     job = Job(source=src, out_dir=tmp_path / "out", clips=Options(count=1, min_len=20, max_len=24),
               render=RenderOptions(encoder="libx264", jumpcut=True), captions=False)
-    manifest = json.loads(run(job, log=lambda _m: None).read_text())
+    lines: list[str] = []
+    manifest = json.loads(run(job, log=lines.append).read_text())
     clip = manifest["clips"][0]
     out = tmp_path / "out" / clip["file"]
     v, a = _stream_duration(out, "v:0"), _stream_duration(out, "a:0")
@@ -44,6 +45,8 @@ def test_jumpcut_removes_the_pauses_and_keeps_av_in_sync(tmp_path: Path):
     assert v == pytest.approx(clip["length"], abs=0.1)
     assert abs(v - a) < 0.1
     assert manifest["render"]["jumpcut"] is True
+    # 20s minimum, ~18.4s left after the cuts: say so
+    assert any("under --min 20s" in line for line in lines)
 
 
 def test_no_audio_means_no_cuts(tmp_path: Path):

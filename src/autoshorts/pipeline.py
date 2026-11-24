@@ -169,6 +169,9 @@ def run(job: Job, log: Log = print, progress: Progress = _no_progress) -> Path:
         cut = clip.duration - length
         log(f"         rendered {name} in {time.perf_counter() - t:.1f}s"
             + (f", cut {cut:.1f}s of pauses ({length:.1f}s left)" if cut > 0.05 else ""))
+        if length < job.clips.min_len - 0.05:
+            # clips are picked by range length, the cuts happen after that
+            log(f"         warning: {name} is {length:.1f}s after cutting pauses, under --min {job.clips.min_len:g}s")
         results.append({**asdict(clip), "file": name, "subtitles": sub, "length": round(length, 2)})
         progress("render", i / len(clips))
 

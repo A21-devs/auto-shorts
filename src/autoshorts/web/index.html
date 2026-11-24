@@ -241,7 +241,10 @@ function clipCard(job, manifest, clip, n) {
     const changed = start !== clip.start || end !== clip.end;
     if (changed) pending.set(key, { start, end });
     else pending.delete(key);
-    times.textContent = `${fmt(start)} - ${fmt(end)}  (${(end - start).toFixed(1)}s)${changed ? "  edited" : ""}`;
+    // with jump cuts the file is shorter than its range. Only known for the rendered range
+    const cutLen = !changed && clip.length != null && clip.end - clip.start - clip.length > 0.05
+      ? `, ${clip.length.toFixed(1)}s after cuts` : "";
+    times.textContent = `${fmt(start)} - ${fmt(end)}  (${(end - start).toFixed(1)}s${cutLen})${changed ? "  edited" : ""}`;
     rerender.disabled = !changed;
     reset.disabled = !changed;
   };
