@@ -179,3 +179,16 @@ def test_no_srt_when_the_clip_has_no_words(tmp_path: Path, monkeypatch: pytest.M
     assert entry["srt"] is None
     assert not (tmp_path / "src_clip01.srt").exists()
     assert not list(tmp_path.glob("*.tmp*"))
+
+
+def test_failed_cover_is_one_short_log_line(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
+    manifest = fake_run(tmp_path)
+    monkeypatch.setattr(pipeline, "probe", lambda p: None)
+    monkeypatch.setattr(pipeline, "render", fake_render)
+    logs: list[str] = []
+
+    entry = rerender_clip(manifest, 1, 5, 20, log=logs.append)  # fake clip bytes: ffprobe can't read it
+
+    assert entry["thumbnail"] is None
+    assert any(m.endswith("no thumbnail for src_clip01.tmp.mp4 (ffprobe couldn't read it)") for m in logs)
+    assert all(len(m) < 120 for m in logs)

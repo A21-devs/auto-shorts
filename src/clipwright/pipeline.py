@@ -5,15 +5,16 @@ from __future__ import annotations
 import json
 import os
 import re
+import subprocess
 import time
 from collections.abc import Callable
 from dataclasses import asdict, dataclass, field, fields
 from pathlib import Path
-from typing import Any
+from typing import Any, NamedTuple
 
 import numpy as np
 
-from . import audio, jumpcut, platforms, scenes, segment, subtitles, transcribe
+from . import audio, jumpcut, platforms, scenes, segment, subtitles, thumbnail, transcribe
 from .captions import CaptionStyle, build_ass, build_srt
 from .probe import MediaInfo, probe
 from .render import RenderOptions, render
@@ -107,8 +108,8 @@ def analyze(info: MediaInfo, job: Job, log: Log,
 
 
 def remove_stale_clips(out_dir: Path, stem: str, keep: int) -> int:
-    """Deletes <stem>_clipNN.mp4/.ass/.srt with NN > keep. Only touches files that match our own naming."""
-    pattern = re.compile(re.escape(stem) + r"_clip(\d{2,})\.(mp4|ass|srt)")
+    """Deletes <stem>_clipNN.mp4/.ass/.srt/.jpg with NN > keep. Only touches files that match our own naming."""
+    pattern = re.compile(re.escape(stem) + r"_clip(\d{2,})\.(mp4|ass|srt|jpg)")
     removed = 0
     for f in out_dir.iterdir():
         m = pattern.fullmatch(f.name)
@@ -129,11 +130,18 @@ def plan_cuts(info: MediaInfo, start: float, end: float) -> jumpcut.Ranges | Non
     return keep
 
 
+class Rendered(NamedTuple):
+    file: str
+    subtitles: str | None   # .ass burned into the video, None without words
+    srt: str | None         # upload subtitles, None when no words fall in the clip
+    thumbnail: str | None   # cover .jpg, None if it couldn't be made
+    length: float           # seconds, shorter than end - start with jump cuts
+
+
 def _render_one(info: MediaInfo, words: list[transcribe.Word], start: float, end: float, out_dir: Path,
-                base: str, opts: RenderOptions, suffix: str = "") -> tuple[str, str | None, str | None, float]:
-    """Writes <base><suffix>.ass (if there are words) and .srt (if any of them are in this clip) and
-    renders <base><suffix>.mp4. Returns the mp4, .ass and .srt names and the length of the rendered
-    clip (shorter than end - start with jump cuts)."""
+                base: str, opts: RenderOptions, suffix: str = "", log: Log = print) -> Rendered:
+    """Writes <base><suffix>.ass (if there are words) and .srt (if any of them are in this clip),
+    renders <base><suffix>.mp4 and grabs <base><suffix>.jpg from it."""
     name = f"{base}{suffix}.mp4"
     keep = plan_cuts(info, start, end) if opts.jumpcut else None
     length = jumpcut.kept_duration(keep) if keep else end - start
@@ -151,7 +159,16 @@ def _render_one(info: MediaInfo, words: list[transcribe.Word], start: float, end
             srt = f"{base}{suffix}.srt"
             (out_dir / srt).write_text(srt_text, encoding="utf-8")
     render(info, start, end, out_dir / name, opts, sub, workdir=out_dir, keep=keep)
-    return name, sub, srt, length
+    thumb: str | None = f"{base}{suffix}.jpg"
+    try:
+        thumbnail.make_thumbnail(out_dir / name, out_dir / f"{base}{suffix}.jpg")
+    except (RuntimeError, OSError, ValueError, subprocess.CalledProcessError) as e:
+        # a missing cover is no reason to throw away a finished clip. CalledProcessError's text is
+        # the whole ffprobe command line, which says nothing a person can use
+        why = "ffprobe couldn't read it" if isinstance(e, subprocess.CalledProcessError) else str(e).splitlines()[0]
+        log(f"         no thumbnail for {name} ({why})")
+        thumb = None
+    return Rendered(name, sub, srt, thumb, length)
 
 
 def _write_manifest(path: Path, data: dict[str, Any]) -> None:
@@ -185,17 +202,18 @@ def run(job: Job, log: Log = print, progress: Progress = _no_progress) -> Path:
         why = ", ".join(clip.reasons)
         log(f"[{i}/{len(clips)}] {clip.start:7.1f}s - {clip.end:7.1f}s  score {clip.score:5.2f}  {why}")
         t = time.perf_counter()
-        name, sub, srt, length = _render_one(info, words, clip.start, clip.end, out_dir, f"{stem}_clip{i:02d}",
-                                        job.render)
+        r = _render_one(info, words, clip.start, clip.end, out_dir, f"{stem}_clip{i:02d}", job.render, log=log)
+        name = r.file
         # round once, so the log and the review page (which reads the manifest) show the same number
-        length = round(length, 2)
+        length = round(r.length, 2)
         cut = clip.duration - length
         log(f"         rendered {name} in {time.perf_counter() - t:.1f}s"
             + (f", cut {cut:.1f}s of pauses ({length:.1f}s left)" if cut > 0.05 else ""))
         if length < job.clips.min_len - 0.05:
             # clips are picked by range length, the cuts happen after that
             log(f"         warning: {name} is {length:.1f}s after cutting pauses, under --min {job.clips.min_len:g}s")
-        results.append({**asdict(clip), "file": name, "subtitles": sub, "srt": srt, "length": length})
+        results.append({**asdict(clip), "file": name, "subtitles": r.subtitles, "srt": r.srt,
+                        "thumbnail": r.thumbnail, "length": length})
         progress("render", i / len(clips))
 
     manifest = out_dir / "manifest.json"
@@ -246,15 +264,16 @@ def rerender_clip(manifest: Path, n: int, start: float, end: float, log: Log = p
     info = probe(source)
     log(f"re-rendering {entry['file']}: {start:.1f}s - {end:.1f}s")
     try:
-        tmp_name, tmp_sub, tmp_srt, length = _render_one(info, words, start, end, out_dir, base,
-                                                _render_options(data.get("render")), suffix=".tmp")
+        r = _render_one(info, words, start, end, out_dir, base, _render_options(data.get("render")),
+                        suffix=".tmp", log=log)
     except BaseException:
-        for leftover in (f"{base}.tmp.mp4", f"{base}.tmp.ass", f"{base}.tmp.srt"):
+        for leftover in (f"{base}.tmp.mp4", f"{base}.tmp.ass", f"{base}.tmp.srt", f"{base}.tmp.jpg"):
             (out_dir / leftover).unlink(missing_ok=True)
         raise
-    os.replace(out_dir / tmp_name, out_dir / entry["file"])
-    # the old captions are for the old range, don't leave them looking like they belong to this clip
-    for key, tmp, ext in (("subtitles", tmp_sub, ".ass"), ("srt", tmp_srt, ".srt")):
+    os.replace(out_dir / r.file, out_dir / entry["file"])
+    # the old captions and cover are for the old range, don't leave them looking like they belong to this clip
+    swaps = (("subtitles", r.subtitles, ".ass"), ("srt", r.srt, ".srt"), ("thumbnail", r.thumbnail, ".jpg"))
+    for key, tmp, ext in swaps:
         if tmp:
             os.replace(out_dir / tmp, out_dir / f"{base}{ext}")
             entry[key] = f"{base}{ext}"
@@ -262,7 +281,7 @@ def rerender_clip(manifest: Path, n: int, start: float, end: float, log: Log = p
             if entry.get(key):
                 (out_dir / Path(entry[key]).name).unlink(missing_ok=True)
             entry[key] = None
-    entry.update(start=round(start, 2), end=round(end, 2), length=round(length, 2), edited=True)
+    entry.update(start=round(start, 2), end=round(end, 2), length=round(r.length, 2), edited=True)
     _write_manifest(manifest, data)
     return dict(entry)
 
