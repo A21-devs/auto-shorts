@@ -1,4 +1,4 @@
-from autoshorts.probe import _fps, _video_rank
+from clipwright.probe import _fps, _video_rank
 
 
 def test_real_video_beats_bigger_thumbnail():

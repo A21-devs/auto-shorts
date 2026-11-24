@@ -1,6 +1,6 @@
 [project]
-name = "autoshorts"
-version = "0.1.0"
+name = "clipwright"
+version = "0.2.0"
 description = "Turn long videos into vertical short clips with captions, automatically."
 readme = "README.md"
 license = "MIT"
@@ -16,7 +16,9 @@ transcribe = ["faster-whisper>=1.1"]
 gpu = ["faster-whisper>=1.1", "nvidia-cublas-cu12>=12.4,<12.9", "nvidia-cudnn-cu12>=9,<10"]
 
 [project.scripts]
-autoshorts = "autoshorts.cli:main"
+clipwright = "clipwright.cli:main"
+# old name, kept so existing scripts keep working
+autoshorts = "clipwright.cli:main"
 
 [dependency-groups]
 dev = ["pytest>=8.3", "ruff>=0.8", "mypy>=1.13"]

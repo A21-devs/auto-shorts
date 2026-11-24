@@ -1,6 +1,6 @@
 """Saved analysis next to the video, so re-runs skip decoding and transcription.
 
-`<video name>.autoshorts.json` holds the parts of the analysis that only depend on the video
+`<video name>.clipwright.json` holds the parts of the analysis that only depend on the video
 and a few settings:
 
 - audio: the loudness curve for a given hop (and whether the track was silent)
@@ -29,6 +29,11 @@ VERSION = 1
 
 
 def cache_path(source: Path) -> Path:
+    return source.with_name(f"{source.name}.clipwright.json")
+
+
+def legacy_cache_path(source: Path) -> Path:
+    """Where the cache lived before the rename (`<video>.autoshorts.json`)."""
     return source.with_name(f"{source.name}.autoshorts.json")
 
 
@@ -54,8 +59,14 @@ class AnalysisCache:
 
     def _load(self) -> dict[str, Any] | None:
         """The saved cache if it's readable and belongs to the video as it is now."""
+        path = self.path
+        if not path.exists() and path == cache_path(self.source):
+            # analysis saved by autoshorts is still good, it gets written back under the new name
+            old = legacy_cache_path(self.source)
+            if old.exists():
+                path = old
         try:
-            saved = json.loads(self.path.read_text(encoding="utf-8"))
+            saved = json.loads(path.read_text(encoding="utf-8"))
         except (OSError, ValueError):
             return None
         if not isinstance(saved, dict) or saved.get("version") != VERSION:

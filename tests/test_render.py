@@ -2,8 +2,8 @@
 
 import pytest
 
-from autoshorts.probe import MediaInfo
-from autoshorts.render import (
+from clipwright.probe import MediaInfo
+from clipwright.render import (
     RenderOptions,
     build_command,
     gain_chain,

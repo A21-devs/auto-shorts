@@ -5,12 +5,12 @@ from pathlib import Path
 import pytest
 from conftest import make_video
 
-from autoshorts import pipeline
-from autoshorts.pipeline import Job, rerender_clip, run
-from autoshorts.probe import probe
-from autoshorts.render import RenderOptions
-from autoshorts.segment import Options
-from autoshorts.transcribe import Word, load_words, save_words
+from clipwright import pipeline
+from clipwright.pipeline import Job, rerender_clip, run
+from clipwright.probe import probe
+from clipwright.render import RenderOptions
+from clipwright.segment import Options
+from clipwright.transcribe import Word, load_words, save_words
 
 
 def fake_run(out: Path, clips: int = 2) -> Path:

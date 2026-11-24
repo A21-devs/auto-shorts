@@ -1,4 +1,4 @@
-"""`autoshorts serve`: a small local HTTP API for running jobs and fetching their clips.
+"""`clipwright serve`: a small local HTTP API for running jobs and fetching their clips.
 
 Standard library only. It binds to 127.0.0.1 by default and is meant for one person on their
 own machine, but it still refuses the two ways a web page could poke at it from a browser:
@@ -148,7 +148,7 @@ class App:
         self.jobs: dict[str, JobState] = {}
         self._lock = threading.Lock()  # submit() runs on request threads
         self._queue: queue.Queue[JobState] = queue.Queue()
-        self._worker = threading.Thread(target=self._work, name="autoshorts-worker", daemon=True)
+        self._worker = threading.Thread(target=self._work, name="clipwright-worker", daemon=True)
         self._worker.start()
 
     def submit(self, job: Job) -> JobState:
@@ -202,7 +202,7 @@ class App:
 
 
 class Handler(BaseHTTPRequestHandler):
-    server_version = "autoshorts"
+    server_version = "clipwright"
     app: App  # set on the subclass made by make_server
 
     def log_message(self, format: str, *args: Any) -> None:  # noqa: A002 - stdlib signature
@@ -423,7 +423,7 @@ def make_server(host: str = "127.0.0.1", port: int = 8765, app: App | None = Non
 
 def serve(host: str = "127.0.0.1", port: int = 8765) -> None:
     server = make_server(host, port)
-    print(f"autoshorts is running at http://{host}:{server.server_address[1]}/  (Ctrl+C to stop)", flush=True)
+    print(f"clipwright is running at http://{host}:{server.server_address[1]}/  (Ctrl+C to stop)", flush=True)
     try:
         server.serve_forever()
     except KeyboardInterrupt:

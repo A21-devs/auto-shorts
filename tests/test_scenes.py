@@ -1,4 +1,4 @@
-from autoshorts.scenes import parse_showinfo
+from clipwright.scenes import parse_showinfo
 
 
 def test_parse_showinfo():

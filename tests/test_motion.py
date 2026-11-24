@@ -6,7 +6,7 @@ from pathlib import Path
 import numpy as np
 import pytest
 
-from autoshorts.motion import Motion, focus, read_motion, small_size
+from clipwright.motion import Motion, focus, read_motion, small_size
 
 
 def test_small_size_keeps_aspect_and_even_height():
@@ -94,7 +94,7 @@ def test_ffmpeg_is_killed_when_reading_fails(tmp_path: Path, monkeypatch: pytest
     src = tmp_path / "long.mp4"
     subprocess.run(["ffmpeg", "-v", "error", "-y", "-f", "lavfi", "-i", "testsrc2=s=320x180:r=30:d=60",
                     "-c:v", "libx264", "-preset", "ultrafast", str(src)], check=True)
-    import autoshorts.motion as motion
+    import clipwright.motion as motion
 
     started: list[subprocess.Popen[bytes]] = []
     real_popen = subprocess.Popen

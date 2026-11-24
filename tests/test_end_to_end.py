@@ -7,10 +7,10 @@ from pathlib import Path
 import pytest
 from conftest import make_video
 
-from autoshorts.pipeline import Job, run
-from autoshorts.probe import probe
-from autoshorts.render import RenderOptions
-from autoshorts.segment import Options
+from clipwright.pipeline import Job, run
+from clipwright.probe import probe
+from clipwright.render import RenderOptions
+from clipwright.segment import Options
 
 pytestmark = [pytest.mark.ffmpeg, pytest.mark.skipif(not shutil.which("ffmpeg"), reason="needs ffmpeg")]
 

@@ -1,8 +1,8 @@
 import numpy as np
 import pytest
 
-from autoshorts.captions import build_ass
-from autoshorts.jumpcut import (
+from clipwright.captions import build_ass
+from clipwright.jumpcut import (
     dead_air,
     dead_air_threshold,
     keep_ranges,
@@ -10,7 +10,7 @@ from autoshorts.jumpcut import (
     retime,
     retime_words,
 )
-from autoshorts.transcribe import Word
+from clipwright.transcribe import Word
 
 SR = 16000
 

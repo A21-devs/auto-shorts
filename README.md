@@ -1,9 +1,11 @@
-# auto-shorts
+# clipwright
+
+Inspired by [AutoClip](https://github.com/zhouxiaoka/autoclip) by @zhouxiaoka. Same idea, written from scratch: a small Python tool you run from the terminal or a local web page.
 
 Give it a long video (a stream VOD, a gameplay recording, a podcast) and it finds the best moments and cuts them into vertical 9:16 shorts with word-by-word captions. It runs on your own machine and doesn't need an API key.
 
 ```bash
-autoshorts "my 2 hour stream.mp4" -n 8
+clipwright "my 2 hour stream.mp4" -n 8
 ```
 
 ```
@@ -50,19 +52,23 @@ Layouts (`--layout`):
 ## Review in the browser
 
 ```bash
-autoshorts serve
+clipwright serve
 ```
 
 Open http://127.0.0.1:8765/, paste the path of a video and hit Make shorts. It shows progress while it works, then every clip with its score and why it was picked. The server only listens on your own machine.
+
+Before 0.2 this was called **clipwright**. The `clipwright` command still works, and analysis cached by the old name is picked up.
+
+Before 0.2 this was called **auto-shorts**. The `autoshorts` command still works, and analysis cached under the old name is picked up.
 
 ## Install
 
 Needs Python 3.12+ and [ffmpeg](https://ffmpeg.org/) on your PATH.
 
 ```bash
-pip install "autoshorts[transcribe] @ git+https://github.com/A21-devs/auto-shorts"
+pip install "clipwright[transcribe] @ git+https://github.com/A21-devs/clipwright"
 # NVIDIA GPU? this pulls in the CUDA libraries so Whisper runs on the GPU:
-pip install "autoshorts[gpu] @ git+https://github.com/A21-devs/auto-shorts"
+pip install "clipwright[gpu] @ git+https://github.com/A21-devs/clipwright"
 ```
 
 Without the `transcribe` extra it still works. It just picks clips from audio + scenes and skips captions.

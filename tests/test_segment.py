@@ -1,7 +1,7 @@
 import numpy as np
 import pytest
 
-from autoshorts.segment import Clip, Options, Signals, candidates, find_clips, pick
+from clipwright.segment import Clip, Options, Signals, candidates, find_clips, pick
 
 
 def flat(seconds: float, hop: float = 0.5) -> np.ndarray:
