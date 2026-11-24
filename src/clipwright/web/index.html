@@ -48,6 +48,9 @@
   .clip .times { font-variant-numeric: tabular-nums; }
   .clip .why { color: var(--muted); font-size: 13px; }
   .clip .files { font-size: 13px; display: flex; gap: 12px; }
+  .clip .post { font-size: 13px; display: grid; gap: 2px; }
+  .clip .post strong { font-size: 14px; }
+  .clip .post .tags { color: var(--muted); }
   .clip .files a { color: var(--muted); }
   .clip .actions { display: flex; gap: 8px; margin-top: auto; }
   .clip .actions button { flex: 1; }
@@ -327,7 +330,13 @@ function clipCard(job, manifest, clip, n) {
     a.download = name;
     files.append(a);
   }
-  meta.append(times, score, why, files, startRow, endRow, editRow, keepRow, err);
+  // title, description and hashtags from --copy, selectable so they can be pasted into the upload form
+  const post = el("div", "post");
+  if (clip.copy) {
+    post.append(el("strong", null, clip.copy.title), el("span", null, clip.copy.description),
+                el("span", "tags", clip.copy.hashtags.map((t) => `#${t}`).join(" ")));
+  }
+  meta.append(times, score, why, post, files, startRow, endRow, editRow, keepRow, err);
   card.append(video, meta);
   return card;
 }

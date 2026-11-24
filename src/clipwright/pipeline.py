@@ -14,7 +14,7 @@ from typing import Any, NamedTuple
 
 import numpy as np
 
-from . import audio, jumpcut, platforms, scenes, segment, subtitles, thumbnail, transcribe
+from . import audio, copywriting, jumpcut, platforms, scenes, segment, subtitles, thumbnail, transcribe
 from .captions import CaptionStyle, build_ass, build_srt
 from .probe import MediaInfo, probe
 from .render import RenderOptions, render
@@ -44,6 +44,9 @@ class Job:
     platform: str | None = None
     # the link the source was downloaded from, kept in the manifest
     url: str | None = None
+    # write a title, description and hashtags per clip with a local AI: "claude" or "ollama"
+    copy: str | None = None
+    copy_model: str = copywriting.DEFAULT_OLLAMA_MODEL  # for ollama
 
 
 def _no_progress(_stage: str, _fraction: float) -> None:
@@ -171,6 +174,20 @@ def _render_one(info: MediaInfo, words: list[transcribe.Word], start: float, end
     return Rendered(name, sub, srt, thumb, length)
 
 
+def _post_copy(job: Job, words: list[transcribe.Word], start: float, end: float,
+               log: Log) -> tuple[dict[str, Any] | None, bool]:
+    """The post text for one clip, and whether it's worth trying the next clip."""
+    inside = [w for w in words if w.end > start and w.start < end]
+    assert job.copy is not None
+    try:
+        post = copywriting.write_copy(inside, job.copy, job.platform, job.copy_model)
+    except copywriting.CopyError as e:
+        log(f"         no title/hashtags: {e}")
+        return None, not e.setup
+    log(f"         title: {post.title}")
+    return post.to_json(), True
+
+
 def _write_manifest(path: Path, data: dict[str, Any]) -> None:
     # write then rename, so a reader (the review page) never sees half a file
     tmp = path.with_name(path.name + ".tmp")
@@ -198,6 +215,7 @@ def run(job: Job, log: Log = print, progress: Progress = _no_progress) -> Path:
         transcribe.save_words(words, out_dir / words_file)
     results = []
     progress("render", 0.0)
+    copy = job.copy  # set to None after a failure that would repeat on every clip
     for i, clip in enumerate(clips, 1):
         why = ", ".join(clip.reasons)
         log(f"[{i}/{len(clips)}] {clip.start:7.1f}s - {clip.end:7.1f}s  score {clip.score:5.2f}  {why}")
@@ -212,8 +230,16 @@ def run(job: Job, log: Log = print, progress: Progress = _no_progress) -> Path:
         if length < job.clips.min_len - 0.05:
             # clips are picked by range length, the cuts happen after that
             log(f"         warning: {name} is {length:.1f}s after cutting pauses, under --min {job.clips.min_len:g}s")
-        results.append({**asdict(clip), "file": name, "subtitles": r.subtitles, "srt": r.srt,
-                        "thumbnail": r.thumbnail, "length": length})
+        entry = {**asdict(clip), "file": name, "subtitles": r.subtitles, "srt": r.srt,
+                 "thumbnail": r.thumbnail, "length": length}
+        if job.copy:
+            entry["copy"] = None
+            if copy:
+                entry["copy"], ok = _post_copy(job, words, clip.start, clip.end, log)
+                if not ok:
+                    copy = None
+                    log("         skipping titles for the rest of the clips")
+        results.append(entry)
         progress("render", i / len(clips))
 
     manifest = out_dir / "manifest.json"

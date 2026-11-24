@@ -68,6 +68,15 @@ Anything [yt-dlp](https://github.com/yt-dlp/yt-dlp) can download works (YouTube,
 
 If there's a `talk.srt` next to `talk.mp4` it's used instead of Whisper, which skips the slowest step. Or point at one with `--srt path/to/file.srt`. SRT only has timings per line, so each line's time is spread over its words by length for the word highlight.
 
+## Titles and hashtags (optional AI)
+
+```bash
+clipwright stream.mp4 --platform tiktok --copy claude     # Claude Code CLI, no API key
+clipwright stream.mp4 --copy ollama --copy-model qwen3    # a local Ollama model
+```
+
+`--copy` writes a title, a short description and 3-6 hashtags for each clip from what's said in it. They go in `manifest.json` and show on the clip cards in `serve`. Only the clip's transcript text is sent, never audio or video, and nothing is sent unless you pass `--copy`. `claude` uses the account the Claude Code CLI is signed in with (`claude auth login`). If a call fails, the clip is still rendered, just without the text.
+
 ## Review in the browser
 
 ```bash
