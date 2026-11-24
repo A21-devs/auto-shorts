@@ -79,3 +79,38 @@ def test_server_lists_tools_and_passes_errors_on(tmp_path: Path):
     assert names == {"make_clips", "list_clips"}
     with pytest.raises(SdkToolError, match="not found"):
         asyncio.run(server.call_tool("list_clips", {"manifest": str(tmp_path / "nope.json")}))
+
+
+def test_parallel_calls_run_one_at_a_time(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
+    pytest.importorskip("mcp")
+    import threading
+    import time
+
+    from clipwright.mcp_server import build_server
+
+    video = tmp_path / "v.mp4"
+    video.write_bytes(b"x")
+    active, peak = [0], [0]
+    count = threading.Lock()
+
+    def fake_run(job: pipeline.Job, log: pipeline.Log = print) -> Path:
+        with count:
+            active[0] += 1
+            peak[0] = max(peak[0], active[0])
+        time.sleep(0.2)
+        with count:
+            active[0] -= 1
+        out = tmp_path / f"out{time.perf_counter_ns()}"
+        out.mkdir()
+        (out / "manifest.json").write_text(json.dumps({"clips": []}), encoding="utf-8")
+        return out / "manifest.json"
+
+    monkeypatch.setattr(pipeline, "run", fake_run)
+    server = build_server()
+
+    async def three() -> None:
+        await asyncio.gather(*[server.call_tool("make_clips", {"video": str(video), "captions": False})
+                               for _ in range(3)])
+
+    asyncio.run(three())
+    assert peak[0] == 1

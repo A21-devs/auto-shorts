@@ -15,6 +15,7 @@ from __future__ import annotations
 import functools
 import json
 import sys
+import threading
 from collections.abc import Callable
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
@@ -26,6 +27,10 @@ if TYPE_CHECKING:
     from mcp.server.mcpserver import MCPServer
 
 LOG_TAIL = 40  # log lines returned with a result; the full log still goes to stderr
+# The SDK runs each sync tool call on its own worker thread, so parallel calls would run parallel
+# pipelines. Queue them instead, like serve's single worker: two Whisper models and two encodes
+# on one GPU are slower than doing them in order.
+_RUN_LOCK = threading.Lock()
 
 
 class ToolError(ValueError):
@@ -58,7 +63,8 @@ def make_clips(video: str, count: int = 6, platform: str | None = None, layout: 
     except BadRequest as e:
         raise ToolError(str(e)) from None
     lines: list[str] = []
-    manifest = pipeline.run(job, log=_stderr_log(lines))
+    with _RUN_LOCK:
+        manifest = pipeline.run(job, log=_stderr_log(lines))
     result = list_clips(str(manifest))
     result["log"] = lines[-LOG_TAIL:]
     return result
