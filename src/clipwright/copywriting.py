@@ -50,7 +50,12 @@ SYSTEM = (
 
 
 class CopyError(RuntimeError):
-    pass
+    """setup=True: a problem with the backend itself (not installed, not signed in, not running),
+    which will be the same for every clip, so there's no point trying the next one."""
+
+    def __init__(self, message: str, setup: bool = False) -> None:
+        super().__init__(message)
+        self.setup = setup
 
 
 @dataclass(frozen=True)
@@ -87,7 +92,7 @@ def parse(data: Any) -> PostCopy:
 def ask_claude(prompt: str, command: Sequence[str] = ("claude",)) -> PostCopy:
     exe = shutil.which(command[0])
     if exe is None:
-        raise CopyError("the claude command isn't installed (https://claude.com/claude-code)")
+        raise CopyError("the claude command isn't installed (https://claude.com/claude-code)", setup=True)
     args = [exe, *command[1:], "-p", "--output-format", "json", "--tools", "", "--no-session-persistence",
             "--system-prompt", SYSTEM, "--json-schema", json.dumps(SCHEMA)]
     try:
@@ -105,7 +110,7 @@ def ask_claude(prompt: str, command: Sequence[str] = ("claude",)) -> PostCopy:
     if out.get("is_error"):
         text = str(out.get("result") or "unknown error")
         if any(k in text.lower() for k in ("auth", "log in", "logged in")):
-            raise CopyError("Claude Code isn't signed in, run `claude auth login` once")
+            raise CopyError("Claude Code isn't signed in, run `claude auth login` once", setup=True)
         raise CopyError(f"claude failed: {text.splitlines()[0]}")
     return parse(out.get("structured_output"))
 
@@ -120,10 +125,10 @@ def ask_ollama(prompt: str, model: str = DEFAULT_OLLAMA_MODEL, url: str = OLLAMA
     except urllib.error.HTTPError as e:
         detail = e.read().decode("utf-8", errors="replace")
         if e.code == 404 and "not found" in detail:
-            raise CopyError(f"Ollama doesn't have {model}, run `ollama pull {model}` once") from None
+            raise CopyError(f"Ollama doesn't have {model}, run `ollama pull {model}` once", setup=True) from None
         raise CopyError(f"Ollama answered {e.code}: {detail[:200]}") from None
     except (urllib.error.URLError, TimeoutError, ConnectionError) as e:
-        raise CopyError(f"can't reach Ollama at {url} ({e}), is it running?") from None
+        raise CopyError(f"can't reach Ollama at {url} ({e}), is it running?", setup=True) from None
     try:
         return parse(json.loads(out["response"]))
     except (KeyError, TypeError, ValueError):

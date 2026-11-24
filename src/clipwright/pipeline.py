@@ -175,16 +175,17 @@ def _render_one(info: MediaInfo, words: list[transcribe.Word], start: float, end
 
 
 def _post_copy(job: Job, words: list[transcribe.Word], start: float, end: float,
-               log: Log) -> dict[str, Any] | None:
+               log: Log) -> tuple[dict[str, Any] | None, bool]:
+    """The post text for one clip, and whether it's worth trying the next clip."""
     inside = [w for w in words if w.end > start and w.start < end]
     assert job.copy is not None
     try:
         post = copywriting.write_copy(inside, job.copy, job.platform, job.copy_model)
     except copywriting.CopyError as e:
         log(f"         no title/hashtags: {e}")
-        return None
+        return None, not e.setup
     log(f"         title: {post.title}")
-    return post.to_json()
+    return post.to_json(), True
 
 
 def _write_manifest(path: Path, data: dict[str, Any]) -> None:
@@ -214,6 +215,7 @@ def run(job: Job, log: Log = print, progress: Progress = _no_progress) -> Path:
         transcribe.save_words(words, out_dir / words_file)
     results = []
     progress("render", 0.0)
+    copy = job.copy  # set to None after a failure that would repeat on every clip
     for i, clip in enumerate(clips, 1):
         why = ", ".join(clip.reasons)
         log(f"[{i}/{len(clips)}] {clip.start:7.1f}s - {clip.end:7.1f}s  score {clip.score:5.2f}  {why}")
@@ -231,7 +233,12 @@ def run(job: Job, log: Log = print, progress: Progress = _no_progress) -> Path:
         entry = {**asdict(clip), "file": name, "subtitles": r.subtitles, "srt": r.srt,
                  "thumbnail": r.thumbnail, "length": length}
         if job.copy:
-            entry["copy"] = _post_copy(job, words, clip.start, clip.end, log)
+            entry["copy"] = None
+            if copy:
+                entry["copy"], ok = _post_copy(job, words, clip.start, clip.end, log)
+                if not ok:
+                    copy = None
+                    log("         skipping titles for the rest of the clips")
         results.append(entry)
         progress("render", i / len(clips))
 

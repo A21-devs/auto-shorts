@@ -126,7 +126,7 @@ def test_pipeline_keeps_going_when_copy_fails(monkeypatch: pytest.MonkeyPatch):
     monkeypatch.setattr(copywriting, "write_copy", boom)
     logs: list[str] = []
     job = pipeline.Job(source=Path("v.mp4"), copy="ollama")
-    assert pipeline._post_copy(job, [Word(1, 2, "hi")], 0, 5, logs.append) is None
+    assert pipeline._post_copy(job, [Word(1, 2, "hi")], 0, 5, logs.append) == (None, True)
     assert logs == ["         no title/hashtags: can't reach Ollama"]
 
 
@@ -141,6 +141,32 @@ def test_pipeline_only_sends_the_clip_words(monkeypatch: pytest.MonkeyPatch):
     monkeypatch.setattr(copywriting, "write_copy", fake)
     job = pipeline.Job(source=Path("v.mp4"), copy="claude", platform="tiktok")
     words = [Word(1, 2, "before"), Word(10, 11, "inside"), Word(30, 31, "after")]
-    assert pipeline._post_copy(job, words, 5, 20, lambda _m: None) == {"title": "t", "description": "d",
-                                                                        "hashtags": ["x"]}
+    assert pipeline._post_copy(job, words, 5, 20, lambda _m: None) == (
+        {"title": "t", "description": "d", "hashtags": ["x"]}, True)
     assert seen == [["inside"]]
+
+
+@pytest.mark.parametrize(("setup", "calls"), [(True, 1), (False, 3)])
+def test_setup_failures_stop_after_the_first_clip(tmp_path: Path, monkeypatch: pytest.MonkeyPatch, setup: bool,
+                                                  calls: int):
+    from clipwright import pipeline
+    from clipwright.segment import Clip
+    tries: list[int] = []
+
+    def fail(*_a: Any) -> PostCopy:
+        tries.append(1)
+        raise CopyError("nope", setup=setup)
+
+    monkeypatch.setattr(copywriting, "write_copy", fail)
+    monkeypatch.setattr(pipeline, "probe", lambda p: type("I", (), {"path": Path("v.mp4"), "duration": 90.0,
+                                                                    "width": 1, "height": 1, "fps": 30.0})())
+    monkeypatch.setattr(pipeline, "analyze", lambda *a: (None, [Word(1, 2, "hi")]))
+    monkeypatch.setattr(pipeline.segment, "find_clips",
+                        lambda *a: [Clip(i * 20.0, i * 20.0 + 15, 1.0, ()) for i in range(3)])
+    monkeypatch.setattr(pipeline, "_render_one",
+                        lambda *a, **k: pipeline.Rendered("c.mp4", None, None, None, 15.0))
+    monkeypatch.setattr(pipeline.transcribe, "save_words", lambda *a: None)
+    job = pipeline.Job(source=Path("v.mp4"), out_dir=tmp_path, copy="claude")
+    data = json.loads(pipeline.run(job, log=lambda _m: None).read_text())
+    assert len(tries) == calls
+    assert [c["copy"] for c in data["clips"]] == [None, None, None]
