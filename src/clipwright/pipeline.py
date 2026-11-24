@@ -14,7 +14,7 @@ from typing import Any, NamedTuple
 
 import numpy as np
 
-from . import audio, jumpcut, platforms, scenes, segment, subtitles, thumbnail, transcribe
+from . import audio, copywriting, jumpcut, platforms, scenes, segment, subtitles, thumbnail, transcribe
 from .captions import CaptionStyle, build_ass, build_srt
 from .probe import MediaInfo, probe
 from .render import RenderOptions, render
@@ -44,6 +44,9 @@ class Job:
     platform: str | None = None
     # the link the source was downloaded from, kept in the manifest
     url: str | None = None
+    # write a title, description and hashtags per clip with a local AI: "claude" or "ollama"
+    copy: str | None = None
+    copy_model: str = copywriting.DEFAULT_OLLAMA_MODEL  # for ollama
 
 
 def _no_progress(_stage: str, _fraction: float) -> None:
@@ -171,6 +174,19 @@ def _render_one(info: MediaInfo, words: list[transcribe.Word], start: float, end
     return Rendered(name, sub, srt, thumb, length)
 
 
+def _post_copy(job: Job, words: list[transcribe.Word], start: float, end: float,
+               log: Log) -> dict[str, Any] | None:
+    inside = [w for w in words if w.end > start and w.start < end]
+    assert job.copy is not None
+    try:
+        post = copywriting.write_copy(inside, job.copy, job.platform, job.copy_model)
+    except copywriting.CopyError as e:
+        log(f"         no title/hashtags: {e}")
+        return None
+    log(f"         title: {post.title}")
+    return post.to_json()
+
+
 def _write_manifest(path: Path, data: dict[str, Any]) -> None:
     # write then rename, so a reader (the review page) never sees half a file
     tmp = path.with_name(path.name + ".tmp")
@@ -212,8 +228,11 @@ def run(job: Job, log: Log = print, progress: Progress = _no_progress) -> Path:
         if length < job.clips.min_len - 0.05:
             # clips are picked by range length, the cuts happen after that
             log(f"         warning: {name} is {length:.1f}s after cutting pauses, under --min {job.clips.min_len:g}s")
-        results.append({**asdict(clip), "file": name, "subtitles": r.subtitles, "srt": r.srt,
-                        "thumbnail": r.thumbnail, "length": length})
+        entry = {**asdict(clip), "file": name, "subtitles": r.subtitles, "srt": r.srt,
+                 "thumbnail": r.thumbnail, "length": length}
+        if job.copy:
+            entry["copy"] = _post_copy(job, words, clip.start, clip.end, log)
+        results.append(entry)
         progress("render", i / len(clips))
 
     manifest = out_dir / "manifest.json"

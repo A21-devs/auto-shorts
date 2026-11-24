@@ -6,7 +6,7 @@ import argparse
 import sys
 from pathlib import Path
 
-from . import __version__, download
+from . import __version__, copywriting, download
 from .pipeline import Job, run
 from .platforms import PLATFORMS, lengths
 from .probe import ToolMissing
@@ -36,6 +36,11 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--srt", type=Path,
                    help="use this subtitle file instead of transcribing (default: <video name>.srt next to the "
                         "video, if there is one)")
+    p.add_argument("--copy", choices=copywriting.BACKENDS,
+                   help="write a title, description and hashtags for each clip with a local AI: claude (the "
+                        "Claude Code CLI, no API key) or ollama. Only the clip's transcript is sent")
+    p.add_argument("--copy-model", default=copywriting.DEFAULT_OLLAMA_MODEL,
+                   help=f"Ollama model for --copy ollama (default {copywriting.DEFAULT_OLLAMA_MODEL})")
     p.add_argument("--model", default="small", help="whisper model size (tiny, base, small, medium, large-v3)")
     p.add_argument("--language", help="force a language code like en (default: auto detect)")
     p.add_argument("--encoder", default="auto", help="auto, h264_nvenc or libx264")
@@ -76,6 +81,9 @@ def main(argv: list[str] | None = None) -> int:
     if url is not None and not download.available():
         print('error: links need yt-dlp: pip install "clipwright[link]"', file=sys.stderr)
         return 2
+    if args.copy and args.no_captions:
+        print("error: --copy writes from the transcript, so it can't be used with --no-captions", file=sys.stderr)
+        return 2
     if args.count < 1:
         print("error: --count must be at least 1", file=sys.stderr)
         return 2
@@ -112,6 +120,8 @@ def main(argv: list[str] | None = None) -> int:
         srt=srt,
         platform=args.platform,
         url=url,
+        copy=args.copy,
+        copy_model=args.copy_model,
     )
     try:
         manifest = run(job)
