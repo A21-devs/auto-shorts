@@ -20,9 +20,9 @@ def test_missing_file(tmp_path: Path):
 
 def test_stale_clips_removed_but_nothing_else(tmp_path: Path):
     for name in ["vod_clip01.mp4", "vod_clip01.ass", "vod_clip02.mp4", "vod_clip05.mp4", "vod_clip05.ass",
-                 "vod_clip05_edit.mp4", "other_clip09.mp4", "notes.txt"]:
+                 "vod_clip05.srt", "vod_clip05_edit.mp4", "other_clip09.mp4", "notes.txt"]:
         (tmp_path / name).write_text("x")
-    assert remove_stale_clips(tmp_path, "vod", keep=2) == 2
+    assert remove_stale_clips(tmp_path, "vod", keep=2) == 3
     left = sorted(p.name for p in tmp_path.iterdir())
     assert left == ["notes.txt", "other_clip09.mp4", "vod_clip01.ass", "vod_clip01.mp4", "vod_clip02.mp4",
                     "vod_clip05_edit.mp4"]

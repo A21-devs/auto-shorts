@@ -84,15 +84,17 @@ def test_old_manifest_drops_stale_captions(tmp_path: Path, monkeypatch: pytest.M
     data = json.loads(manifest.read_text())
     del data["words"]
     data["clips"][0]["subtitles"] = "src_clip01.ass"
+    data["clips"][0]["srt"] = "src_clip01.srt"
     manifest.write_text(json.dumps(data))
     (tmp_path / "src_clip01.ass").write_text("old captions")
+    (tmp_path / "src_clip01.srt").write_text("old captions")
     monkeypatch.setattr(pipeline, "probe", lambda p: None)
     monkeypatch.setattr(pipeline, "render", fake_render)
 
     entry = rerender_clip(manifest, 1, 5, 20, log=lambda _m: None)
 
-    assert entry["subtitles"] is None
-    assert not (tmp_path / "src_clip01.ass").exists()
+    assert entry["subtitles"] is None and entry["srt"] is None
+    assert not (tmp_path / "src_clip01.ass").exists() and not (tmp_path / "src_clip01.srt").exists()
     assert (tmp_path / "src_clip01.mp4").read_bytes() == b"new clip"
 
 
@@ -138,6 +140,8 @@ def test_rerender_real_clip_with_captions(tmp_path: Path):
     assert (clip.width, clip.height) == (1080, 1920)
     assert abs(clip.duration - 12.0) < 0.2
     assert "NUDGED" in (out / entry["subtitles"]).read_text(encoding="utf-8")
+    # the upload .srt is rebuilt for the new range too, relative to its start
+    assert (out / entry["srt"]).read_text(encoding="utf-8") == "1\n00:00:01,000 --> 00:00:02,000\nnudged clip\n"
     assert not list(out.glob("*.tmp*"))
 
 

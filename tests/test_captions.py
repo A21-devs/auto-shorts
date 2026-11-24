@@ -1,4 +1,4 @@
-from clipwright.captions import CaptionStyle, _ass_color, _ts, build_ass, group_words
+from clipwright.captions import CaptionStyle, _ass_color, _ts, build_ass, build_srt, group_words
 from clipwright.transcribe import Word
 
 
@@ -58,3 +58,17 @@ def test_braces_in_words_cant_inject_ass_tags():
 def test_no_words_gives_valid_header_only():
     doc = build_ass([], 0, 10)
     assert "[Events]" in doc and "Dialogue:" not in doc
+
+
+def test_srt_uses_full_lines_relative_to_the_clip():
+    words = [Word(9.0, 9.5, "before"), Word(10.2, 10.5, "so"), Word(10.5, 11.0, "this"), Word(11.0, 11.4, "is"),
+             Word(11.4, 12.0, "the"), Word(12.0, 12.6, "part."), Word(14.0, 14.5, "Next"), Word(14.5, 15.2, "one")]
+    srt = build_srt(words, 10.0, 15.0)
+    assert srt == ("1\n00:00:00,200 --> 00:00:02,600\nso this is the part.\n\n"
+                   "2\n00:00:04,000 --> 00:00:05,000\nNext one\n")
+
+
+def test_srt_breaks_long_lines():
+    words = [Word(i * 0.3, i * 0.3 + 0.25, "word") for i in range(20)]
+    lines = [ln for ln in build_srt(words, 0.0, 10.0).splitlines() if ln.startswith("word")]
+    assert len(lines) > 1 and all(len(ln) <= 42 for ln in lines)
