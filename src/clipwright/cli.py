@@ -15,12 +15,8 @@ from .segment import Options
 from .subtitles import sidecar
 
 
-def build_parser() -> argparse.ArgumentParser:
-    p = argparse.ArgumentParser(prog="clipwright", description="Cut a long video into vertical shorts.")
-    p.add_argument("video", help="input video file, or a link (YouTube, Twitch, ...) with clipwright[link] installed")
-    p.add_argument("--downloads", type=Path, default=Path("."),
-                   help="where links are downloaded to (default: the current folder)")
-    p.add_argument("-o", "--out", type=Path, help="output folder (default: <video name>_shorts next to the video)")
+def add_job_args(p: argparse.ArgumentParser) -> None:
+    """Options that shape each job, shared by the normal run and `watch`."""
     p.add_argument("-n", "--count", type=int, default=6, help="how many clips (default 6)")
     p.add_argument("--platform", choices=list(PLATFORMS),
                    help="pick clip lengths for this platform: "
@@ -34,9 +30,6 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--no-captions", action="store_true", help="skip transcription and captions")
     p.add_argument("--jumpcut", action="store_true",
                    help="cut out pauses longer than 0.5s inside each clip (captions are retimed to match)")
-    p.add_argument("--srt", type=Path,
-                   help="use this subtitle file instead of transcribing (default: <video name>.srt next to the "
-                        "video, if there is one)")
     p.add_argument("--copy", choices=copywriting.BACKENDS,
                    help="write a title, description and hashtags for each clip with a local AI: claude (the "
                         "Claude Code CLI, no API key) or ollama. Only the clip's transcript is sent")
@@ -45,8 +38,56 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--model", default="small", help="whisper model size (tiny, base, small, medium, large-v3)")
     p.add_argument("--language", help="force a language code like en (default: auto detect)")
     p.add_argument("--encoder", default="auto", help="auto, h264_nvenc or libx264")
+
+
+def build_parser() -> argparse.ArgumentParser:
+    p = argparse.ArgumentParser(prog="clipwright", description="Cut a long video into vertical shorts.")
+    p.add_argument("video", help="input video file, or a link (YouTube, Twitch, ...) with clipwright[link] installed")
+    p.add_argument("--downloads", type=Path, default=Path("."),
+                   help="where links are downloaded to (default: the current folder)")
+    p.add_argument("-o", "--out", type=Path, help="output folder (default: <video name>_shorts next to the video)")
+    add_job_args(p)
+    p.add_argument("--srt", type=Path,
+                   help="use this subtitle file instead of transcribing (default: <video name>.srt next to the "
+                        "video, if there is one)")
     p.add_argument("--version", action="version", version=f"clipwright {__version__}")
     return p
+
+
+def check_job_args(args: argparse.Namespace) -> str | None:
+    """Validates the shared job options (filling in min/max from --platform). Returns an error
+    message, or None when they're fine."""
+    if args.layout == "speaker" and not speaker.available():
+        return '--layout speaker needs OpenCV: pip install "clipwright[speaker]"'
+    if args.copy and args.no_captions:
+        return "--copy writes from the transcript, so it can't be used with --no-captions"
+    if args.count < 1:
+        return "--count must be at least 1"
+    try:
+        args.min_len, args.max_len = lengths(args.platform, args.min_len, args.max_len)
+    except ValueError as e:
+        return str(e)
+    if args.min_len <= 0 or args.max_len < args.min_len:
+        return "--min must be > 0 and --max must be >= --min"
+    return None
+
+
+def job_from_args(args: argparse.Namespace, video: Path, out_dir: Path | None, srt: Path | None,
+                  url: str | None = None) -> Job:
+    return Job(
+        source=video,
+        out_dir=out_dir,
+        clips=Options(count=args.count, min_len=args.min_len, max_len=args.max_len),
+        render=RenderOptions(layout=args.layout, encoder=args.encoder, jumpcut=args.jumpcut),
+        captions=not args.no_captions,
+        whisper_model=args.model,
+        language=args.language,
+        srt=srt,
+        platform=args.platform,
+        url=url,
+        copy=args.copy,
+        copy_model=args.copy_model,
+    )
 
 
 def serve_main(argv: list[str]) -> int:
@@ -67,12 +108,51 @@ def serve_main(argv: list[str]) -> int:
     return 0
 
 
+def watch_main(argv: list[str]) -> int:
+    p = argparse.ArgumentParser(
+        prog="clipwright watch",
+        description="Wait for new recordings in a folder (OBS and the like) and clip each one when it's finished. "
+                    "Recordings that already have clips are skipped, so it's safe to restart.")
+    p.add_argument("folder", type=Path, help="folder the recorder saves to (subfolders are not watched)")
+    p.add_argument("-o", "--out", type=Path,
+                   help="put each recording's <name>_shorts folder here (default: next to the recording)")
+    p.add_argument("--settle", type=float, default=10.0,
+                   help="seconds a file has to stop changing before it counts as finished (default 10)")
+    p.add_argument("--interval", type=float, default=2.0, help="seconds between folder checks (default 2)")
+    add_job_args(p)
+    args = p.parse_args(argv)
+    if not args.folder.is_dir():
+        print(f"error: {args.folder} is not a folder", file=sys.stderr)
+        return 2
+    if args.settle < 0 or args.interval <= 0:
+        print("error: --settle must be >= 0 and --interval > 0", file=sys.stderr)
+        return 2
+    if (err := check_job_args(args)) is not None:
+        print(f"error: {err}", file=sys.stderr)
+        return 2
+    from . import watch  # only needed here
+
+    def handle(video: Path) -> None:
+        srt = None if args.no_captions else sidecar(video)
+        manifest = run(job_from_args(args, video, watch.out_dir_for(video, args.out), srt))
+        print(f"done: {manifest.parent}\n")
+
+    print(f"watching {args.folder.resolve()} (Ctrl+C to stop)")
+    try:
+        watch.watch(args.folder, handle, settle=args.settle, interval=args.interval, out_root=args.out)
+    except KeyboardInterrupt:
+        print("stopped")
+    return 0
+
+
 def main(argv: list[str] | None = None) -> int:
     argv = sys.argv[1:] if argv is None else argv
-    # `serve` is a subcommand, everything else is the original `clipwright video.mp4 ...` form.
-    # A video literally named "serve" can still be passed as ./serve.
+    # `serve` and `watch` are subcommands, everything else is the original `clipwright video.mp4 ...`
+    # form. A video literally named "serve" or "watch" can still be passed as ./serve.
     if argv[:1] == ["serve"]:
         return serve_main(argv[1:])
+    if argv[:1] == ["watch"]:
+        return watch_main(argv[1:])
     args = build_parser().parse_args(argv)
     url = args.video if download.is_url(args.video) else None
     args.video = Path(args.video)
@@ -82,22 +162,8 @@ def main(argv: list[str] | None = None) -> int:
     if url is not None and not download.available():
         print('error: links need yt-dlp: pip install "clipwright[link]"', file=sys.stderr)
         return 2
-    if args.layout == "speaker" and not speaker.available():
-        print('error: --layout speaker needs OpenCV: pip install "clipwright[speaker]"', file=sys.stderr)
-        return 2
-    if args.copy and args.no_captions:
-        print("error: --copy writes from the transcript, so it can't be used with --no-captions", file=sys.stderr)
-        return 2
-    if args.count < 1:
-        print("error: --count must be at least 1", file=sys.stderr)
-        return 2
-    try:
-        args.min_len, args.max_len = lengths(args.platform, args.min_len, args.max_len)
-    except ValueError as e:
-        print(f"error: {e}", file=sys.stderr)
-        return 2
-    if args.min_len <= 0 or args.max_len < args.min_len:
-        print("error: --min must be > 0 and --max must be >= --min", file=sys.stderr)
+    if (err := check_job_args(args)) is not None:
+        print(f"error: {err}", file=sys.stderr)
         return 2
     srt = args.srt
     if srt is not None and not srt.is_file():
@@ -113,20 +179,7 @@ def main(argv: list[str] | None = None) -> int:
             return 4
     if srt is None and not args.no_captions:
         srt = sidecar(args.video)
-    job = Job(
-        source=args.video,
-        out_dir=args.out,
-        clips=Options(count=args.count, min_len=args.min_len, max_len=args.max_len),
-        render=RenderOptions(layout=args.layout, encoder=args.encoder, jumpcut=args.jumpcut),
-        captions=not args.no_captions,
-        whisper_model=args.model,
-        language=args.language,
-        srt=srt,
-        platform=args.platform,
-        url=url,
-        copy=args.copy,
-        copy_model=args.copy_model,
-    )
+    job = job_from_args(args, args.video, args.out, srt, url)
     try:
         manifest = run(job)
     except ToolMissing as e:

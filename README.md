@@ -78,6 +78,14 @@ clipwright stream.mp4 --copy ollama --copy-model qwen3    # a local Ollama model
 
 `--copy` writes a title, a short description and 3-6 hashtags for each clip from what's said in it. They go in `manifest.json` and show on the clip cards in `serve`. Only the clip's transcript text is sent, never audio or video, and nothing is sent unless you pass `--copy`. `claude` uses the account the Claude Code CLI is signed in with (`claude auth login`). If a call fails, the clip is still rendered, just without the text.
 
+## Watch a recordings folder
+
+```
+clipwright watch "D:/Videos/OBS" --platform shorts --layout follow
+```
+
+Waits for new recordings in the folder and clips each one once it's finished. A file counts as finished when it has stopped growing for 10 seconds (`--settle`), so it works with OBS without any plugin. Partial downloads (`.part`, `.tmp`) are ignored, subfolders aren't watched, and recordings that already have a `manifest.json` are skipped, so you can stop and restart it any time. Takes the same clip options as a normal run; `-o` sets where the `<name>_shorts` folders go.
+
 ## Review in the browser
 
 ```bash
