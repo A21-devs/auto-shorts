@@ -104,3 +104,92 @@ def test_read_faces_reports_ffmpeg_errors(tmp_path: Path):
     bad.write_bytes(b"not a video")
     with pytest.raises(RuntimeError, match="face analysis failed"):
         read_faces(bad, 0, 640, 360, detect=lambda g: [])
+
+
+# --- who to show ---------------------------------------------------------------------------------
+
+from clipwright.speaker import clear_speaker, speaker_path, talking, tracks  # noqa: E402
+
+
+def _face(centre: float, mouth: float, size: float = 0.2) -> Face:
+    return Face(centre - size / 2, 0.2, size, size * 1.6, mouth)
+
+
+def _podcast(script: str, fps: float = 5.0) -> Faces:
+    """Two people at 0.25 and 0.75. `script` has one letter per second: L or R talks, - nobody."""
+    frames = []
+    for who in script:
+        for _ in range(int(fps)):
+            frames.append([_face(0.25, 15.0 if who == "L" else 0.3), _face(0.75, 15.0 if who == "R" else 0.3)])
+    return Faces(fps, frames)
+
+
+def test_tracks_group_faces_and_drop_rare_hits():
+    f = _podcast("LLLLLLLLLL")
+    f.frames[3].append(_face(0.5, 40.0))  # one false hit in the middle
+    people = tracks(f)
+    assert [round(t.centre, 2) for t in people] == [0.25, 0.75]
+    assert all(t.presence == 1.0 for t in people)
+    assert tracks(Faces(5.0, [[], []])) == []
+
+
+def test_short_wide_shot_keeps_its_people():
+    # edited podcast: 4 s wide shot (left talking), then a 14 s close-up of the left person
+    wide = [[_face(0.25, 15.0, 0.08), _face(0.75, 0.3, 0.08)]] * 20
+    close = [[_face(0.5, 15.0, 0.3)]] * 70
+    f = Faces(5.0, wide + close)
+    assert [round(t.centre, 2) for t in tracks(f)] == [0.25, 0.5, 0.75]
+    keys = speaker_path(f, window=0.32)
+    assert keys == [(0.0, 0.25), (4.0, 0.25), (4.0, 0.5), (18.0, 0.5)]
+    # a face seen for under 2 s and under 30% of the time is still dropped
+    f.frames[30] = f.frames[30] + [_face(0.9, 30.0)]
+    assert len(tracks(f)) == 3
+
+
+def test_talking_scores_per_second():
+    scores = talking(_podcast("LR"), tracks(_podcast("LR")))
+    assert scores[0][0] > 10 > scores[0][1]
+    assert scores[1][1] > 10 > scores[1][0]
+
+
+def test_clear_speaker_needs_a_lead():
+    assert clear_speaker([15.0, 0.3]) == 0
+    assert clear_speaker([0.3, 15.0]) == 1
+    assert clear_speaker([10.0, 9.0]) is None  # both talking: crosstalk, keep the shot
+    assert clear_speaker([1.0, 0.0]) is None   # nobody really talking
+    assert clear_speaker([]) is None
+
+
+def test_path_cuts_between_speakers():
+    keys = speaker_path(_podcast("LLLLLLRRRRRRLLLLLL"), window=0.32)
+    # holds on the left face, hard cut at 6 s, back at 12 s, both centres clamped into reach
+    assert keys == [(0.0, 0.25), (6.0, 0.25), (6.0, 0.75), (12.0, 0.75), (12.0, 0.25), (18.0, 0.25)]
+
+
+def test_path_ignores_short_interjections():
+    # R says "yeah" for one second: no cut away and back. R then takes over at 9 s
+    keys = speaker_path(_podcast("LLLLRLLLLRRRRR"), window=0.32)
+    assert keys == [(0.0, 0.25), (9.0, 0.25), (9.0, 0.75), (14.0, 0.75)]
+
+
+def test_path_waits_min_shot_between_cuts():
+    # R takes over at 4 s, L answers 2 s later, L only gets the shot once 3 s have passed
+    keys = speaker_path(_podcast("LLLLRRLLLLL"), window=0.32, min_shot=3.0)
+    assert keys == [(0.0, 0.25), (4.0, 0.25), (4.0, 0.75), (7.0, 0.75), (7.0, 0.25), (11.0, 0.25)]
+
+
+def test_path_ignores_a_takeover_cut_short_by_the_end():
+    assert speaker_path(_podcast("LLLLLR"), window=0.32) == [(0.0, 0.25), (6.0, 0.25)]
+
+
+def test_path_starts_on_the_biggest_face_when_nobody_talks():
+    f = Faces(5.0, [[_face(0.25, 0.0, size=0.1), _face(0.7, 0.0, size=0.25)]] * 20)
+    keys = speaker_path(f, window=0.32)
+    assert keys == [(0.0, 0.7), (4.0, 0.7)]
+
+
+def test_path_clamps_to_the_frame_and_handles_no_faces():
+    f = Faces(5.0, [[_face(0.05, 15.0)]] * 10)
+    assert speaker_path(f, window=0.32)[0] == (0.0, pytest.approx(0.16))
+    assert speaker_path(Faces(5.0, [[]] * 10), window=0.32) == [(0.0, 0.5)]
+    assert speaker_path(f, window=1.0) == [(0.0, 0.5)]
