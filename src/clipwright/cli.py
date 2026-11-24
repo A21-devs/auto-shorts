@@ -3,13 +3,14 @@
 from __future__ import annotations
 
 import argparse
+import io
 import sys
 from pathlib import Path
 
 from . import __version__, copywriting, download, speaker
 from .pipeline import Job, run
 from .platforms import PLATFORMS, lengths
-from .probe import ToolMissing
+from .probe import ToolMissing, require
 from .render import RenderOptions
 from .segment import Options
 from .subtitles import sidecar
@@ -130,6 +131,18 @@ def watch_main(argv: list[str]) -> int:
     if (err := check_job_args(args)) is not None:
         print(f"error: {err}", file=sys.stderr)
         return 2
+    try:
+        # the normal run finds out on the first ffprobe call, a watcher would only log a failure
+        # per recording and look healthy
+        require("ffmpeg")
+        require("ffprobe")
+    except ToolMissing as e:
+        print(f"error: {e}", file=sys.stderr)
+        return 3
+    if isinstance(sys.stdout, io.TextIOWrapper):
+        # a watcher usually runs with its output going to a file (Task Scheduler, `> watch.log`),
+        # where Python would buffer it in 8 KB blocks and lose the tail if it's stopped
+        sys.stdout.reconfigure(line_buffering=True)
     from . import watch  # only needed here
 
     def handle(video: Path) -> None:

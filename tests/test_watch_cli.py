@@ -22,6 +22,13 @@ def test_watch_checks_options_before_starting(tmp_path: Path, args: list[str], c
     assert "error:" in capsys.readouterr().err
 
 
+def test_watch_needs_ffmpeg_up_front(tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys):
+    monkeypatch.setattr(shutil, "which", lambda name: None)
+    monkeypatch.setattr(watch, "watch", lambda *a, **k: pytest.fail("should not start"))
+    assert main(["watch", str(tmp_path)]) == 3
+    assert "not found on PATH" in capsys.readouterr().err
+
+
 def test_watch_stops_cleanly_on_ctrl_c(tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys):
     def interrupted(*a: object, **k: object) -> None:
         raise KeyboardInterrupt
