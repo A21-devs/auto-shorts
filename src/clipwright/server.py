@@ -38,6 +38,7 @@ from urllib.parse import unquote
 from .pipeline import Job, mark_clip, rerender_clip, run
 from .render import RenderOptions
 from .segment import Options
+from .subtitles import sidecar
 
 PAGE = Path(__file__).with_name("web") / "index.html"
 MAX_BODY = 64 * 1024
@@ -137,6 +138,7 @@ def parse_job(body: dict[str, Any]) -> Job:
         render=RenderOptions(layout=layout, jumpcut=jump),
         captions=captions,
         whisper_model=model,
+        srt=sidecar(src) if captions else None,
     )
 
 
