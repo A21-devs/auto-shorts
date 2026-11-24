@@ -27,6 +27,22 @@ class DownloadError(RuntimeError):
     pass
 
 
+# yt-dlp warnings that come up on every YouTube download, as one line each with what to do
+KNOWN_WARNINGS = {
+    "No supported JavaScript runtime": "no JavaScript runtime, some YouTube formats may be missing "
+                                       "(install deno to fix: https://deno.com)",
+    "no impersonate target is available": "no browser impersonation available, fine unless the site blocks "
+                                          "the download (pip install curl_cffi to fix)",
+}
+
+
+def short_warning(msg: str) -> str:
+    for needle, short in KNOWN_WARNINGS.items():
+        if needle in msg:
+            return short
+    return msg.removeprefix("WARNING: ")
+
+
 def is_url(text: str) -> bool:
     return bool(_URL.fullmatch(text.strip()))
 
@@ -55,10 +71,15 @@ def options(folder: Path, log: Log, on_progress: Fraction | None, subtitles: str
             pass
 
         def warning(self, msg: str) -> None:
-            log(f"yt-dlp: {msg}")
+            short = short_warning(msg)
+            if short not in shown:
+                shown.add(short)
+                log(f"yt-dlp: {short}")
 
         def error(self, msg: str) -> None:
-            log(f"yt-dlp: {msg}")
+            pass  # yt-dlp raises DownloadError with the same text right after, the caller reports that
+
+    shown: set[str] = set()
 
     opts: dict[str, Any] = {
         "format": FORMAT,

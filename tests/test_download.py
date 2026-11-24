@@ -100,3 +100,15 @@ def test_cli_checks_options_before_downloading(monkeypatch: pytest.MonkeyPatch, 
     monkeypatch.setattr(download, "download", lambda *a, **k: pytest.fail("should not download"))
     assert main(["https://www.youtube.com/watch?v=abc", "--min", "30", "--max", "10"]) == 2
     assert "--max must be" in capsys.readouterr().err
+
+
+def test_known_warnings_are_shortened_and_shown_once(tmp_path: Path):
+    lines: list[str] = []
+    logger = download.options(tmp_path, lines.append, None, None)["logger"]
+    js = "[youtube] No supported JavaScript runtime could be found. Only deno is enabled by default; ..."
+    logger.warning(js)
+    logger.warning(js)
+    logger.warning("WARNING: something new")
+    logger.error("ERROR: this is raised as DownloadError too")
+    assert lines == [f"yt-dlp: {download.KNOWN_WARNINGS['No supported JavaScript runtime']}",
+                     "yt-dlp: something new"]
