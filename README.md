@@ -51,6 +51,7 @@ Layouts (`--layout`):
 - `blur` (default): the full video fits the width, with a blurred zoomed copy behind it
 - `crop`: fills the frame (center crop)
 - `follow`: fills the frame and pans slowly toward where the motion is (good for gameplay)
+- `speaker`: fills the frame and cuts to whoever is talking, for podcasts and interviews. Finds faces with OpenCV and watches whose mouth moves, so it needs `pip install "clipwright[speaker]"`
 - `fit`: black bars
 
 `--jumpcut` cuts pauses longer than half a second out of each clip, keeping 0.1s on each side so words aren't clipped. Captions are retimed to match. A pause is anything 25 dB under the clip's loud parts, so constant game audio is left alone.
