@@ -163,8 +163,10 @@ def _render_one(info: MediaInfo, words: list[transcribe.Word], start: float, end
     try:
         thumbnail.make_thumbnail(out_dir / name, out_dir / f"{base}{suffix}.jpg")
     except (RuntimeError, OSError, ValueError, subprocess.CalledProcessError) as e:
-        # a missing cover is no reason to throw away a finished clip
-        log(f"         no thumbnail for {name}: {str(e).splitlines()[0]}")
+        # a missing cover is no reason to throw away a finished clip. CalledProcessError's text is
+        # the whole ffprobe command line, which says nothing a person can use
+        why = "ffprobe couldn't read it" if isinstance(e, subprocess.CalledProcessError) else str(e).splitlines()[0]
+        log(f"         no thumbnail for {name} ({why})")
         thumb = None
     return Rendered(name, sub, srt, thumb, length)
 
