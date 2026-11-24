@@ -40,3 +40,23 @@ def test_pipeline_finds_the_loud_part_and_renders_vertical(tmp_path: Path):
     assert (out.width, out.height) == (1080, 1920)
     assert 15 <= out.duration <= 26
     assert out.has_audio
+
+
+@pytest.mark.parametrize("captions", [False, True])
+def test_relative_source_path_from_the_video_folder(tmp_path: Path, monkeypatch: pytest.MonkeyPatch, captions: bool):
+    make_video(tmp_path / "long.mp4")
+    srt = None
+    if captions:
+        # subtitles instead of whisper, so the .ass path through render() (cwd = output folder) is covered
+        srt = tmp_path / "long.srt"
+        cues = [f"{i + 1}\n00:00:{i * 5:02d},000 --> 00:00:{i * 5 + 4:02d},000\nline {i}\n" for i in range(12)]
+        srt.write_text("\n".join(cues), encoding="utf-8")
+    monkeypatch.chdir(tmp_path)
+    # render runs ffmpeg inside the output folder, so a relative input used to point at out/long.mp4
+    job = Job(source=Path("long.mp4"), out_dir=Path("out"), clips=Options(count=1, min_len=15, max_len=25),
+              render=RenderOptions(encoder="libx264"), captions=captions, srt=srt)
+    manifest = json.loads(run(job, log=lambda _m: None).read_text())
+    assert Path(manifest["source"]) == tmp_path / "long.mp4"
+    clip = manifest["clips"][0]
+    assert (tmp_path / "out" / clip["file"]).stat().st_size > 0
+    assert bool(clip["subtitles"]) == captions

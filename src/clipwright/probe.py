@@ -59,6 +59,9 @@ def _video_rank(s: dict[str, Any]) -> tuple[int, int]:
 
 
 def probe(path: Path) -> MediaInfo:
+    # absolute from here on: render runs ffmpeg inside the output folder, and the manifest keeps
+    # this path for re-renders started later from another working directory
+    path = path.resolve()
     out = subprocess.run(
         [require("ffprobe"), "-v", "error", "-show_entries",
          "format=duration:stream=index,codec_type,codec_name,width,height,avg_frame_rate,nb_frames,disposition",
