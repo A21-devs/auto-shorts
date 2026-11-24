@@ -90,3 +90,34 @@ def test_unwritable_location_is_not_an_error(video: Path, tmp_path: Path):
     c.put_cuts(0.35, 5, [1.0])
     assert c.save() is False
     assert not (tmp_path / "missing-dir").exists()
+
+
+def test_two_runs_saving_keep_each_others_transcripts(video: Path):
+    a, b = AnalysisCache(video), AnalysisCache(video)   # both loaded before either saved
+    a.put_words("tiny", None, [Word(0, 1, "tiny")])
+    b.put_words("small", None, [Word(0, 1, "small")])
+    b.put_cuts(0.35, 5, [2.0])
+    assert a.save() and b.save()
+    c = AnalysisCache(video)
+    assert c.get_words("tiny", None) == [Word(0, 1, "tiny")]
+    assert c.get_words("small", None) == [Word(0, 1, "small")]
+    assert c.get_cuts(0.35, 5) == [2.0]
+
+
+def test_save_does_not_bring_back_a_stale_cache_for_a_changed_video(video: Path):
+    c = AnalysisCache(video)
+    c.put_cuts(0.35, 5, [1.0])
+    c.save()
+    video.write_bytes(b"replaced with a different file")
+    fresh = AnalysisCache(video)
+    fresh.put_audio(0.5, [-10.0], False)
+    fresh.save()
+    again = AnalysisCache(video)
+    assert again.get_cuts(0.35, 5) is None and again.get_audio(0.5) == ([-10.0], False)
+
+
+def test_no_temp_files_left_behind(video: Path):
+    c = AnalysisCache(video)
+    c.put_cuts(0.35, 5, [1.0])
+    c.save()
+    assert sorted(p.name for p in video.parent.iterdir()) == ["game.mp4", "game.mp4.autoshorts.json"]

@@ -19,6 +19,7 @@ from __future__ import annotations
 
 import json
 import os
+import threading
 from pathlib import Path
 from typing import Any
 
@@ -40,14 +41,26 @@ class AnalysisCache:
     def __init__(self, source: Path, path: Path | None = None) -> None:
         self.source = source
         self.path = path or cache_path(source)
-        self.dirty = False
-        self.data: dict[str, Any] = {"version": VERSION, "source": fingerprint(source)}
+        self.data: dict[str, Any] = self._load() or self._empty()
+        # what this instance changed: "audio", "cuts", or ("transcripts", key)
+        self._changed: set[str | tuple[str, str]] = set()
+
+    @property
+    def dirty(self) -> bool:
+        return bool(self._changed)
+
+    def _empty(self) -> dict[str, Any]:
+        return {"version": VERSION, "source": fingerprint(self.source)}
+
+    def _load(self) -> dict[str, Any] | None:
+        """The saved cache if it's readable and belongs to the video as it is now."""
         try:
             saved = json.loads(self.path.read_text(encoding="utf-8"))
         except (OSError, ValueError):
-            return
-        if isinstance(saved, dict) and saved.get("version") == VERSION and saved.get("source") == self.data["source"]:
-            self.data = saved
+            return None
+        if not isinstance(saved, dict) or saved.get("version") != VERSION:
+            return None
+        return saved if saved.get("source") == fingerprint(self.source) else None
 
     # --- audio -------------------------------------------------------------------------------
 
@@ -62,7 +75,7 @@ class AnalysisCache:
 
     def put_audio(self, hop: float, db: list[float], silent: bool) -> None:
         self.data["audio"] = {"hop": hop, "db": [round(float(v), 2) for v in db], "silent": silent}
-        self.dirty = True
+        self._changed.add("audio")
 
     # --- scene cuts --------------------------------------------------------------------------
 
@@ -81,7 +94,7 @@ class AnalysisCache:
 
     def put_cuts(self, threshold: float, fps: int, times: list[float]) -> None:
         self.data["cuts"] = {"key": self._cuts_key(threshold, fps), "times": list(times)}
-        self.dirty = True
+        self._changed.add("cuts")
 
     # --- transcripts -------------------------------------------------------------------------
 
@@ -105,21 +118,37 @@ class AnalysisCache:
         t = self.data.setdefault("transcripts", {})
         if not isinstance(t, dict):
             t = self.data["transcripts"] = {}
-        t[self._words_key(model, language)] = [[w.start, w.end, w.text] for w in words]
-        self.dirty = True
+        key = self._words_key(model, language)
+        t[key] = [[w.start, w.end, w.text] for w in words]
+        self._changed.add(("transcripts", key))
 
     # --- disk --------------------------------------------------------------------------------
 
     def save(self) -> bool:
-        """Writes the cache if anything changed. Returns False when it couldn't be written."""
-        if not self.dirty:
+        """Writes the cache if anything changed. Returns False when it couldn't be written.
+
+        Another run on the same video (a CLI run next to `serve`, or a second model) may have
+        saved since this one loaded, so re-read the file and apply only this instance's changes
+        on top, instead of overwriting the other run's transcript with our stale copy."""
+        if not self._changed:
             return True
-        tmp = self.path.with_name(self.path.name + ".tmp")
+        merged = self._load() or self._empty()
+        for change in self._changed:
+            if isinstance(change, tuple):
+                merged.setdefault("transcripts", {})
+                if not isinstance(merged["transcripts"], dict):
+                    merged["transcripts"] = {}
+                merged["transcripts"][change[1]] = self.data["transcripts"][change[1]]
+            else:
+                merged[change] = self.data[change]
+        # unique per process and thread, two writers must not share (and truncate) one temp file
+        tmp = self.path.with_name(f"{self.path.name}.{os.getpid()}-{threading.get_ident()}.tmp")
         try:
-            tmp.write_text(json.dumps(self.data, ensure_ascii=False), encoding="utf-8")
+            tmp.write_text(json.dumps(merged, ensure_ascii=False), encoding="utf-8")
             os.replace(tmp, self.path)
         except OSError:
             tmp.unlink(missing_ok=True)
             return False
-        self.dirty = False
+        self.data = merged
+        self._changed.clear()
         return True
