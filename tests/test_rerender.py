@@ -160,3 +160,22 @@ def test_mark_clip(tmp_path: Path):
     assert [c.get("keep", "unset") for c in json.loads(manifest.read_text())["clips"]] == ["unset", None]
     with pytest.raises(ValueError, match="doesn't exist"):
         pipeline.mark_clip(manifest, 3, True)
+
+
+def test_no_srt_when_the_clip_has_no_words(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
+    # words exist in the video, just not in the new range: captions file yes (empty), upload .srt no
+    manifest = fake_run(tmp_path)
+    data = json.loads(manifest.read_text())
+    data["words"] = "src_words.json"
+    data["clips"][0]["srt"] = "src_clip01.srt"
+    manifest.write_text(json.dumps(data))
+    save_words([Word(50.0, 50.5, "later")], tmp_path / "src_words.json")
+    (tmp_path / "src_clip01.srt").write_text("old")
+    monkeypatch.setattr(pipeline, "probe", lambda p: None)
+    monkeypatch.setattr(pipeline, "render", fake_render)
+
+    entry = rerender_clip(manifest, 1, 5, 20, log=lambda _m: None)
+
+    assert entry["srt"] is None
+    assert not (tmp_path / "src_clip01.srt").exists()
+    assert not list(tmp_path.glob("*.tmp*"))
