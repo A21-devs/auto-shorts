@@ -2,8 +2,8 @@ from pathlib import Path
 
 import pytest
 
-from autoshorts.cli import main
-from autoshorts.pipeline import remove_stale_clips
+from clipwright.cli import main
+from clipwright.pipeline import remove_stale_clips
 
 
 @pytest.mark.parametrize("args", [["-n", "0"], ["-n", "-3"], ["--min", "0"], ["--min", "30", "--max", "20"]])

@@ -1,5 +1,5 @@
-from autoshorts.captions import CaptionStyle, _ass_color, _ts, build_ass, group_words
-from autoshorts.transcribe import Word
+from clipwright.captions import CaptionStyle, _ass_color, _ts, build_ass, group_words
+from clipwright.transcribe import Word
 
 
 def words(*items: tuple[float, float, str]) -> list[Word]:

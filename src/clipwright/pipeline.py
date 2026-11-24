@@ -77,7 +77,7 @@ def analyze(info: MediaInfo, job: Job, log: Log,
                                           on_progress=lambda f: progress("transcribe", f))
             progress("transcribe", 1.0)
         else:
-            log("faster-whisper not installed, skipping captions (pip install autoshorts[transcribe])")
+            log("faster-whisper not installed, skipping captions (pip install clipwright[transcribe])")
 
     boundaries = sorted({round((a + b) / 2, 2) for a, b in quiet} | set(transcribe.sentence_ends(words)))
     sig = segment.Signals(

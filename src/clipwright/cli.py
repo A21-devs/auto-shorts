@@ -1,4 +1,4 @@
-"""autoshorts command line."""
+"""clipwright command line."""
 
 from __future__ import annotations
 
@@ -14,7 +14,7 @@ from .segment import Options
 
 
 def build_parser() -> argparse.ArgumentParser:
-    p = argparse.ArgumentParser(prog="autoshorts", description="Cut a long video into vertical shorts.")
+    p = argparse.ArgumentParser(prog="clipwright", description="Cut a long video into vertical shorts.")
     p.add_argument("video", type=Path, help="input video file")
     p.add_argument("-o", "--out", type=Path, help="output folder (default: <video name>_shorts next to the video)")
     p.add_argument("-n", "--count", type=int, default=6, help="how many clips (default 6)")
@@ -29,12 +29,12 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--model", default="small", help="whisper model size (tiny, base, small, medium, large-v3)")
     p.add_argument("--language", help="force a language code like en (default: auto detect)")
     p.add_argument("--encoder", default="auto", help="auto, h264_nvenc or libx264")
-    p.add_argument("--version", action="version", version=f"autoshorts {__version__}")
+    p.add_argument("--version", action="version", version=f"clipwright {__version__}")
     return p
 
 
 def serve_main(argv: list[str]) -> int:
-    p = argparse.ArgumentParser(prog="autoshorts serve", description="Run the local review server.")
+    p = argparse.ArgumentParser(prog="clipwright serve", description="Run the local review server.")
     p.add_argument("--port", type=int, default=8765, help="port on 127.0.0.1 (default 8765, 0 = any free port)")
     args = p.parse_args(argv)
     if not 0 <= args.port <= 65535:
@@ -52,7 +52,7 @@ def serve_main(argv: list[str]) -> int:
 
 def main(argv: list[str] | None = None) -> int:
     argv = sys.argv[1:] if argv is None else argv
-    # `serve` is a subcommand, everything else is the original `autoshorts video.mp4 ...` form.
+    # `serve` is a subcommand, everything else is the original `clipwright video.mp4 ...` form.
     # A video literally named "serve" can still be passed as ./serve.
     if argv[:1] == ["serve"]:
         return serve_main(argv[1:])

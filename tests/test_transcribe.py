@@ -1,6 +1,6 @@
 import numpy as np
 
-from autoshorts.transcribe import Word, _is_cuda_error, sentence_ends, speech_density
+from clipwright.transcribe import Word, _is_cuda_error, sentence_ends, speech_density
 
 
 def test_speech_density_counts_words_per_second():

@@ -4,8 +4,8 @@ from pathlib import Path
 
 import pytest
 
-from autoshorts.cache import AnalysisCache, cache_path
-from autoshorts.transcribe import Word
+from clipwright.cache import AnalysisCache, cache_path
+from clipwright.transcribe import Word
 
 
 @pytest.fixture
@@ -16,7 +16,7 @@ def video(tmp_path: Path) -> Path:
 
 
 def test_path_sits_next_to_the_video(video: Path):
-    assert cache_path(video) == video.with_name("game.mp4.autoshorts.json")
+    assert cache_path(video) == video.with_name("game.mp4.clipwright.json")
 
 
 def test_round_trip(video: Path):
@@ -120,4 +120,19 @@ def test_no_temp_files_left_behind(video: Path):
     c = AnalysisCache(video)
     c.put_cuts(0.35, 5, [1.0])
     c.save()
-    assert sorted(p.name for p in video.parent.iterdir()) == ["game.mp4", "game.mp4.autoshorts.json"]
+    assert sorted(p.name for p in video.parent.iterdir()) == ["game.mp4", "game.mp4.clipwright.json"]
+
+
+def test_reads_a_cache_saved_under_the_old_name(video: Path):
+    c = AnalysisCache(video)
+    c.put_cuts(0.35, 5, [4.0])
+    assert c.save()
+    cache_path(video).rename(video.with_name("game.mp4.autoshorts.json"))
+
+    again = AnalysisCache(video)
+    assert again.get_cuts(0.35, 5) == [4.0]
+    again.put_audio(0.5, [-20.0], False)
+    assert again.save()
+    # written back under the new name, with the old sections kept
+    assert json.loads(cache_path(video).read_text(encoding="utf-8"))["cuts"]
+    assert not video.with_name("game.mp4.autoshorts.json").exists()

@@ -5,8 +5,8 @@ from dataclasses import dataclass, field
 import numpy as np
 import pytest
 
-from autoshorts import transcribe
-from autoshorts.transcribe import monotonic
+from clipwright import transcribe
+from clipwright.transcribe import monotonic
 
 
 @dataclass

@@ -9,9 +9,9 @@ from typing import Any
 
 import pytest
 
-from autoshorts import server
-from autoshorts.pipeline import Job
-from autoshorts.server import App, BadRequest, make_server, parse_job, parse_range
+from clipwright import server
+from clipwright.pipeline import Job
+from clipwright.server import App, BadRequest, make_server, parse_job, parse_range
 
 release = threading.Event()
 

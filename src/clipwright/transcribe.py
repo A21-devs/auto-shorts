@@ -117,7 +117,7 @@ def transcribe(
     except (RuntimeError, ValueError, OSError) as err:
         if device == "cuda" or not _is_cuda_error(err):
             raise
-        log(f"GPU transcription unavailable ({err}), using CPU. `pip install autoshorts[gpu]` fixes this.")
+        log(f"GPU transcription unavailable ({err}), using CPU. `pip install clipwright[gpu]` fixes this.")
         return _run(audio, model_size, "cpu", language, progress)
 
 

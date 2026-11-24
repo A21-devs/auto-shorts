@@ -215,7 +215,7 @@ def render(info: MediaInfo, start: float, end: float, out: Path, opts: RenderOpt
     temp_sub: Path | None = None
     if subtitle_file and not SAFE_NAME.fullmatch(subtitle_file):
         base = workdir or Path.cwd()
-        temp_sub = base / f"_autoshorts_{out.stem.encode().hex()[:16]}.ass"
+        temp_sub = base / f"_clipwright_{out.stem.encode().hex()[:16]}.ass"
         shutil.copyfile(base / subtitle_file, temp_sub)
         subtitle_file = temp_sub.name
     gain = fit_gain(info, start, end) if info.has_audio and opts.normalize_audio else None

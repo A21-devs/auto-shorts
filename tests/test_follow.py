@@ -6,9 +6,9 @@ from pathlib import Path
 import numpy as np
 import pytest
 
-from autoshorts.follow import camera_path, centre_expr, crop_x_expr, simplify
-from autoshorts.probe import MediaInfo
-from autoshorts.render import follow_crop_x, video_filter
+from clipwright.follow import camera_path, centre_expr, crop_x_expr, simplify
+from clipwright.probe import MediaInfo
+from clipwright.render import follow_crop_x, video_filter
 
 NAN = float("nan")
 

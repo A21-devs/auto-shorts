@@ -1,6 +1,6 @@
 ﻿import numpy as np
 
-from autoshorts.audio import SILENCE_DB, loudness_curve, quiet_threshold, silences, zscore
+from clipwright.audio import SILENCE_DB, loudness_curve, quiet_threshold, silences, zscore
 
 
 def test_loudness_of_full_scale_sine_is_about_minus_3db():
