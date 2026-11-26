@@ -292,3 +292,46 @@ def test_download_error_is_reported(tmp_path: Path, monkeypatch: pytest.MonkeyPa
     monkeypatch.setattr(pipeline, "run", lambda *a, **k: pytest.fail("should not run"))
     with pytest.raises(download.DownloadError, match="private"):
         make_clips("https://www.youtube.com/watch?v=abc", downloads=str(tmp_path))
+
+
+def test_downloads_into_one_folder_run_one_at_a_time(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
+    import threading
+    import time
+
+    monkeypatch.setattr(download, "available", lambda: True)
+    active: dict[Path, int] = {}
+    peak: dict[Path, int] = {}
+    overall = [0, 0]
+    guard = threading.Lock()
+
+    def slow(url: str, folder: Path, log=print, on_progress=None, subtitles=None) -> Path:
+        with guard:
+            active[folder] = active.get(folder, 0) + 1
+            peak[folder] = max(peak.get(folder, 0), active[folder])
+            overall[0] += 1
+            overall[1] = max(overall[1], overall[0])
+        time.sleep(0.2)
+        with guard:
+            active[folder] -= 1
+            overall[0] -= 1
+        folder.mkdir(parents=True, exist_ok=True)
+        video = folder / "v.mp4"
+        video.write_bytes(b"x")
+        return video
+
+    monkeypatch.setattr(download, "download", slow)
+    monkeypatch.setattr(pipeline, "run", _fake_run(tmp_path))
+    notes: list[list[str]] = [[] for _ in range(4)]
+    folders = [tmp_path / "a", tmp_path / "a", tmp_path / "a", tmp_path / "b"]
+    threads = [threading.Thread(target=make_clips, args=("https://example.com/v",),
+                                kwargs={"downloads": str(f), "captions": False,
+                                        "out": str(tmp_path / f"out{i}"),
+                                        "report": lambda p, m, i=i: notes[i].append(m)})
+               for i, f in enumerate(folders)]
+    for t in threads:
+        t.start()
+    for t in threads:
+        t.join()
+    assert peak == {tmp_path / "a": 1, tmp_path / "b": 1}
+    assert overall[1] == 2  # a different folder doesn't wait
+    assert sum(any(m.startswith("waiting for another download") for m in n) for n in notes) == 2

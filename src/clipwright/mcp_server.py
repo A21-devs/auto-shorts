@@ -37,6 +37,11 @@ LOG_TAIL = 40  # log lines returned with a result; the full log still goes to st
 # pipelines. Queue them instead, like serve's single worker: two Whisper models and two encodes
 # on one GPU are slower than doing them in order.
 _RUN_LOCK = threading.Lock()
+# Downloads run outside _RUN_LOCK, but two into one folder can be the same video (an agent retrying,
+# or youtu.be/x and youtube.com/watch?v=x), and yt-dlp would write the same .part file twice.
+# One at a time per folder; the second then finds the finished file and skips the download.
+_DOWNLOAD_LOCKS: dict[Path, threading.Lock] = {}
+_DOWNLOAD_LOCKS_GUARD = threading.Lock()
 
 
 # Where each pipeline stage sits in the 0..1 progress sent to the agent. Rough shares of a run's
@@ -133,8 +138,16 @@ def _fetch(job: pipeline.Job, folder: Path, log: pipeline.Log, progress: RunProg
     and points the job at the file."""
     assert job.url is not None
     lang = (job.language or "en") if job.captions else None
-    path = download.download(job.url, folder, log=log, on_progress=lambda f: progress("download", f),
-                             subtitles=lang)
+    with _DOWNLOAD_LOCKS_GUARD:
+        lock = _DOWNLOAD_LOCKS.setdefault(folder.resolve(), threading.Lock())
+    if not lock.acquire(blocking=False):
+        progress.note(f"waiting for another download into {folder}")
+        lock.acquire()
+    try:
+        path = download.download(job.url, folder, log=log, on_progress=lambda f: progress("download", f),
+                                 subtitles=lang)
+    finally:
+        lock.release()
     progress("download", 1.0)
     return replace(job, source=path, out_dir=job.out_dir or path.with_name(f"{path.stem}_shorts"),
                    srt=sidecar(path) if job.captions else None)
