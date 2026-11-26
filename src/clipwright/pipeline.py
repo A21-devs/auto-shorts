@@ -114,8 +114,8 @@ def analyze(info: MediaInfo, job: Job, log: Log,
 
 
 def remove_stale_clips(out_dir: Path, stem: str, keep: int) -> int:
-    """Deletes <stem>_clipNN.mp4/.ass/.srt/.jpg with NN > keep. Only touches files that match our own naming."""
-    pattern = re.compile(re.escape(stem) + r"_clip(\d{2,})\.(mp4|ass|srt|jpg)")
+    """Deletes <stem>_clipNN.mp4/.ass/.srt/.jpg/.txt with NN > keep. Only touches files that match our own naming."""
+    pattern = re.compile(re.escape(stem) + r"_clip(\d{2,})\.(mp4|ass|srt|jpg|txt)")
     removed = 0
     for f in out_dir.iterdir():
         m = pattern.fullmatch(f.name)
@@ -194,6 +194,19 @@ def _post_copy(job: Job, words: list[transcribe.Word], start: float, end: float,
     return post.to_json(), True
 
 
+def post_text(post: dict[str, Any]) -> str:
+    """The text to paste when posting: title, description, then the hashtags on one line. Platforms
+    without a title field (TikTok, Reels, X) take the whole thing as the caption."""
+    tags = " ".join(f"#{t}" for t in post.get("hashtags") or [])
+    parts = (str(post.get("title") or ""), str(post.get("description") or ""), tags)
+    return "\n\n".join(p for p in parts if p) + "\n"
+
+
+def _write_post(path: Path, post: dict[str, Any]) -> str:
+    path.write_text(post_text(post), encoding="utf-8")
+    return path.name
+
+
 def _write_manifest(path: Path, data: dict[str, Any]) -> None:
     # write then rename, so a reader (the review page) never sees half a file
     tmp = path.with_name(path.name + ".tmp")
@@ -258,6 +271,9 @@ def run(job: Job, log: Log = print, progress: Progress = _no_progress) -> Path:
                  "thumbnail": r.thumbnail, "length": length}
         if job.copy:
             entry["copy"] = post
+            entry["post"] = None
+            if post:
+                entry["post"] = _write_post(out_dir / f"{stem}_clip{i:02d}.txt", post)
         if hook:
             entry["hook"] = hook
         results.append(entry)
