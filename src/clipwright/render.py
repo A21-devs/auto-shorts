@@ -1,4 +1,4 @@
-﻿"""Renders one clip to a 1080x1920 MP4 with ffmpeg."""
+﻿"""Renders one clip to an MP4 with ffmpeg (1080x1920 by default, or square / 4:5 / landscape)."""
 
 from __future__ import annotations
 
@@ -20,6 +20,19 @@ LAYOUTS: tuple[Layout, ...] = ("blur", "crop", "follow", "speaker", "fit")
 PANNED: tuple[Layout, ...] = ("follow", "speaker")  # layouts that move a 9:16 crop window over time
 
 W, H = 1080, 1920
+# output frame per --aspect. 9:16 is the shorts default; 16:9 keeps the original landscape shape
+# (YouTube, X), 1:1 and 4:5 are what feed posts look best at.
+Aspect = Literal["9:16", "1:1", "4:5", "16:9"]
+ASPECTS: dict[str, tuple[int, int]] = {"9:16": (W, H), "1:1": (1080, 1080), "4:5": (1080, 1350),
+                                       "16:9": (1920, 1080)}
+
+
+def frame_size(aspect: str) -> tuple[int, int]:
+    """(width, height) of the rendered frame. ValueError for an aspect that isn't offered."""
+    try:
+        return ASPECTS[aspect]
+    except KeyError:
+        raise ValueError(f"aspect must be one of {', '.join(ASPECTS)}") from None
 SAFE_NAME = re.compile(r"[A-Za-z0-9_.-]+")
 
 
@@ -31,6 +44,7 @@ class RenderOptions:
     max_fps: int = 60
     normalize_audio: bool = True
     jumpcut: bool = False           # cut out pauses inside the clip (needs audio)
+    aspect: str = "9:16"            # a key of ASPECTS
 
 
 @functools.cache
@@ -61,9 +75,10 @@ def pick_encoder(requested: str) -> str:
 
 
 def video_filter(layout: Layout, subtitle_file: str | None, fps: float, max_fps: int,
-                 crop_x: str | None = None) -> str:
-    """filter_complex graph from [0:v] to [vout]. `crop_x` is the x expression for "follow" and
-    "speaker" (without one they behave like "crop")."""
+                 crop_x: str | None = None, size: tuple[int, int] = (W, H)) -> str:
+    """filter_complex graph from [0:v] to [vout], `size` wide and tall. `crop_x` is the x
+    expression for "follow" and "speaker" (without one they behave like "crop")."""
+    W, H = size  # noqa: N806 - same names as the module defaults, so the graphs read the same
     if layout == "crop" or (layout in PANNED and not crop_x):
         g = f"[0:v]scale={W}:{H}:force_original_aspect_ratio=increase,crop={W}:{H},setsar=1[v]"
     elif layout in PANNED:
@@ -175,7 +190,7 @@ def build_command(info: MediaInfo, start: float, end: float, out: Path, opts: Re
     clip, renders it straight through."""
     enc = pick_encoder(opts.encoder)
     gain = gain_chain(gain_db) if info.has_audio and opts.normalize_audio and gain_db is not None else None
-    graph = video_filter(opts.layout, subtitle_file, info.fps, opts.max_fps, crop_x)
+    graph = video_filter(opts.layout, subtitle_file, info.fps, opts.max_fps, crop_x, frame_size(opts.aspect))
     cut = keep is not None and len(keep) > 0 and keep != [(0.0, round(end - start, 3))]
     if keep is not None and cut:
         graph = jumpcut_filter(keep, info.has_audio, gain) + ";" + graph.replace("[0:v]", "[jv]", 1)
@@ -195,10 +210,12 @@ def build_command(info: MediaInfo, start: float, end: float, out: Path, opts: Re
     return cmd
 
 
-def follow_crop_x(info: MediaInfo, start: float, end: float, keep: jumpcut.Ranges | None = None) -> str | None:
+def follow_crop_x(info: MediaInfo, start: float, end: float, keep: jumpcut.Ranges | None = None,
+                  size: tuple[int, int] = (W, H)) -> str | None:
     """crop x expression that pans toward the action in [start, end], or None when the source is
-    already 9:16 or narrower (nothing to pan). With jump cuts the keyframes are moved onto the
-    shortened timeline, since crop sees the frames after concat."""
+    already as narrow as the output or narrower (nothing to pan). With jump cuts the keyframes are
+    moved onto the shortened timeline, since crop sees the frames after concat."""
+    W, H = size  # noqa: N806
     scaled_w = info.width * H / info.height
     if scaled_w <= W + 1:
         return None
@@ -209,10 +226,12 @@ def follow_crop_x(info: MediaInfo, start: float, end: float, keep: jumpcut.Range
     return follow.crop_x_expr(keys)
 
 
-def speaker_crop_x(info: MediaInfo, start: float, end: float, keep: jumpcut.Ranges | None = None) -> str | None:
+def speaker_crop_x(info: MediaInfo, start: float, end: float, keep: jumpcut.Ranges | None = None,
+                   size: tuple[int, int] = (W, H)) -> str | None:
     """crop x expression that sits on whoever is talking in [start, end] and cuts between people,
-    or None when the source is already 9:16 or narrower. Jump cuts are handled like `follow`:
+    or None when the source is already as narrow as the output. Jump cuts are handled like `follow`:
     both keyframes of a cut map to the same shortened time, so it stays a cut."""
+    W, H = size  # noqa: N806
     scaled_w = info.width * H / info.height
     if scaled_w <= W + 1:
         return None
@@ -237,10 +256,11 @@ def render(info: MediaInfo, start: float, end: float, out: Path, opts: RenderOpt
         subtitle_file = temp_sub.name
     gain = fit_gain(info, start, end) if info.has_audio and opts.normalize_audio else None
     crop_x: str | None = None
+    size = frame_size(opts.aspect)
     if opts.layout == "follow":
-        crop_x = follow_crop_x(info, start, end, keep)
+        crop_x = follow_crop_x(info, start, end, keep, size)
     elif opts.layout == "speaker":
-        crop_x = speaker_crop_x(info, start, end, keep)
+        crop_x = speaker_crop_x(info, start, end, keep, size)
     cmd = build_command(info, start, end, out.resolve(), opts, subtitle_file, gain, crop_x, keep)
     try:
         proc = subprocess.run(cmd, cwd=workdir, capture_output=True, text=True, errors="replace")

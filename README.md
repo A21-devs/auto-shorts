@@ -35,7 +35,9 @@ Every window between `--min` and `--max` seconds gets a score. Start and end poi
 
 ## Platforms
 
-`--platform shorts|tiktok|reels` picks clip lengths that fit: Shorts 15-58s (hard limit 60), TikTok 15-60s (limit 3 min), Reels 15-60s (limit 90s). `--min`/`--max` still win, but a `--max` over the platform's limit is an error instead of an upload that gets rejected later. The platform is saved in `manifest.json`.
+`--platform shorts|tiktok|reels|youtube|x|linkedin` picks clip lengths that fit: Shorts 15-58s (hard limit 60), TikTok 15-60s (limit 3 min), Reels 15-60s (limit 90s), YouTube 1-5 min landscape, X 15-120s landscape (limit 2:20), LinkedIn 15-90s square. `--min`/`--max` still win, but a `--max` over the platform's limit is an error instead of an upload that gets rejected later. The platform is saved in `manifest.json`.
+
+`--aspect 9:16|1:1|4:5|16:9` picks the frame. Vertical 9:16 is the default; `youtube` and `x` default to 16:9 and `linkedin` to 1:1, and `--aspect` overrides either. Every layout, the captions and the covers follow the frame, so a landscape clip of a podcast still gets the speaker layout and readable captions.
 
 ## Output
 

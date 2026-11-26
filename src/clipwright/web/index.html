@@ -86,6 +86,9 @@
         <option value="shorts" data-min="15" data-max="58">YouTube Shorts</option>
         <option value="tiktok" data-min="15" data-max="60">TikTok</option>
         <option value="reels" data-min="15" data-max="60">Instagram Reels</option>
+        <option value="youtube" data-min="60" data-max="300">YouTube (landscape)</option>
+        <option value="x" data-min="15" data-max="120">X</option>
+        <option value="linkedin" data-min="15" data-max="90">LinkedIn</option>
       </select>
     </label>
     <label>Min seconds <input type="number" name="min" value="20" min="1" max="600" step="any"></label>
@@ -93,6 +96,11 @@
     <label>Layout
       <select name="layout">
         <option value="blur">blur</option><option value="crop">crop</option><option value="follow">follow</option><option value="speaker">speaker</option><option value="fit">fit</option>
+      </select>
+    </label>
+    <label>Frame
+      <select name="aspect">
+        <option value="">platform's</option><option value="9:16">9:16 vertical</option><option value="1:1">1:1 square</option><option value="4:5">4:5 feed</option><option value="16:9">16:9 landscape</option>
       </select>
     </label>
     <label>Whisper model
@@ -392,6 +400,7 @@ $("new-job").addEventListener("submit", async (ev) => {
     layout: f.get("layout"),
     model: f.get("model"),
     platform: f.get("platform") || null,
+    aspect: f.get("aspect") || null,
     captions: f.get("captions") === "on",
     jumpcut: f.get("jumpcut") === "on",
   };

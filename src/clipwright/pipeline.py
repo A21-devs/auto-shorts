@@ -17,7 +17,7 @@ import numpy as np
 from . import audio, copywriting, jumpcut, platforms, scenes, segment, speaker, subtitles, thumbnail, transcribe
 from .captions import CaptionStyle, build_ass, build_srt
 from .probe import MediaInfo, probe
-from .render import LAYOUTS, Layout, RenderOptions, render
+from .render import LAYOUTS, Layout, RenderOptions, frame_size, render
 
 Log = Callable[[str], None]
 # (stage, fraction of that stage done). Stages in order: audio, scenes, transcribe (only with
@@ -155,7 +155,8 @@ def _render_one(info: MediaInfo, words: list[transcribe.Word], start: float, end
             timed, t0, t1 = jumpcut.retime_words(words, start, keep), 0.0, length
         else:
             timed, t0, t1 = words, start, end
-        ass = build_ass(timed, t0, t1, CaptionStyle())
+        w, h = frame_size(opts.aspect)
+        ass = build_ass(timed, t0, t1, CaptionStyle().for_frame(w, h), width=w, height=h)
         (out_dir / sub).write_text(ass, encoding="utf-8")
         srt_text = build_srt(timed, t0, t1)
         if srt_text:  # a 0-byte .srt gets rejected on upload, no file is better
