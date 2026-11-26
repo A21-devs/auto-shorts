@@ -8,16 +8,16 @@ import re
 import subprocess
 import time
 from collections.abc import Callable
-from dataclasses import asdict, dataclass, field, fields
+from dataclasses import asdict, dataclass, field, fields, replace
 from pathlib import Path
-from typing import Any, NamedTuple
+from typing import Any, NamedTuple, get_args
 
 import numpy as np
 
-from . import audio, copywriting, jumpcut, platforms, scenes, segment, subtitles, thumbnail, transcribe
+from . import audio, copywriting, jumpcut, platforms, scenes, segment, speaker, subtitles, thumbnail, transcribe
 from .captions import CaptionStyle, build_ass, build_srt
 from .probe import MediaInfo, probe
-from .render import RenderOptions, render
+from .render import Layout, RenderOptions, render
 
 Log = Callable[[str], None]
 # (stage, fraction of that stage done). Stages in order: audio, scenes, transcribe (only with
@@ -258,8 +258,21 @@ def _render_options(saved: dict[str, Any] | None) -> RenderOptions:
     return RenderOptions(**{k: v for k, v in (saved or {}).items() if k in known})
 
 
-def rerender_clip(manifest: Path, n: int, start: float, end: float, log: Log = print) -> dict[str, Any]:
+def check_layout(layout: str) -> Layout:
+    """`layout` as a Layout, or ValueError with what's wrong (unknown, or speaker without OpenCV)."""
+    if layout not in get_args(Layout):
+        raise ValueError(f"layout must be one of {', '.join(get_args(Layout))}")
+    if layout == "speaker" and not speaker.available():
+        raise ValueError('the speaker layout needs OpenCV: pip install "clipwright[speaker]"')
+    return layout  # type: ignore[return-value]  # checked against the Literal's values above
+
+
+def rerender_clip(manifest: Path, n: int, start: float, end: float, log: Log = print,
+                  layout: str | None = None) -> dict[str, Any]:
     """Re-renders clip number n (1-based) of a finished run over [start, end] and updates manifest.json.
+
+    `layout` changes the layout of this clip only. It's saved on the clip's entry, so later
+    re-renders of it (a trim on the review page) keep it; other clips keep the run's layout.
 
     Renders to a temp name first and swaps it in at the end, so a failed render leaves the old clip
     (and its captions) as they were.
@@ -268,6 +281,8 @@ def rerender_clip(manifest: Path, n: int, start: float, end: float, log: Log = p
     clips = data["clips"]
     if not 1 <= n <= len(clips):
         raise ValueError(f"clip {n} doesn't exist, this run has {len(clips)}")
+    if layout is not None:
+        layout = check_layout(layout)
     start, end = max(0.0, float(start)), min(float(data["duration"]), float(end))
     if end - start < MIN_CLIP:
         raise ValueError(f"clip must be at least {MIN_CLIP:g}s long (got {start:.2f}s - {end:.2f}s)")
@@ -278,6 +293,10 @@ def rerender_clip(manifest: Path, n: int, start: float, end: float, log: Log = p
     out_dir = manifest.parent
     entry = clips[n - 1]
     base = Path(entry["file"]).stem
+    opts = _render_options(data.get("render"))
+    chosen = layout or entry.get("layout")
+    if chosen:
+        opts = replace(opts, layout=check_layout(chosen))
     words: list[transcribe.Word] = []
     if data.get("words"):
         try:
@@ -289,10 +308,9 @@ def rerender_clip(manifest: Path, n: int, start: float, end: float, log: Log = p
         # otherwise ffprobe fails and all you get is its command line
         raise ValueError(f"the original video is gone ({source}), was it moved or renamed?")
     info = probe(source)
-    log(f"re-rendering {entry['file']}: {start:.1f}s - {end:.1f}s")
+    log(f"re-rendering {entry['file']}: {start:.1f}s - {end:.1f}s, {opts.layout} layout")
     try:
-        r = _render_one(info, words, start, end, out_dir, base, _render_options(data.get("render")),
-                        suffix=".tmp", log=log)
+        r = _render_one(info, words, start, end, out_dir, base, opts, suffix=".tmp", log=log)
     except BaseException:
         for leftover in (f"{base}.tmp.mp4", f"{base}.tmp.ass", f"{base}.tmp.srt", f"{base}.tmp.jpg"):
             (out_dir / leftover).unlink(missing_ok=True)
@@ -309,6 +327,8 @@ def rerender_clip(manifest: Path, n: int, start: float, end: float, log: Log = p
                 (out_dir / Path(entry[key]).name).unlink(missing_ok=True)
             entry[key] = None
     entry.update(start=round(start, 2), end=round(end, 2), length=round(r.length, 2), edited=True)
+    if layout is not None:
+        entry["layout"] = layout
     _write_manifest(manifest, data)
     return dict(entry)
 

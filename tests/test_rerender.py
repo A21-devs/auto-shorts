@@ -192,3 +192,43 @@ def test_failed_cover_is_one_short_log_line(tmp_path: Path, monkeypatch: pytest.
     assert entry["thumbnail"] is None
     assert any(m.endswith("no thumbnail for src_clip01.tmp.mp4 (ffprobe couldn't read it)") for m in logs)
     assert all(len(m) < 120 for m in logs)
+
+
+def _capture_layouts(monkeypatch: pytest.MonkeyPatch) -> list[str]:
+    layouts: list[str] = []
+
+    def render(_info, _a, _b, out: Path, opts: RenderOptions, *_args, **_kw):
+        layouts.append(opts.layout)
+        out.write_bytes(b"new clip")
+
+    monkeypatch.setattr(pipeline, "probe", lambda p: None)
+    monkeypatch.setattr(pipeline, "render", render)
+    return layouts
+
+
+def test_layout_override_applies_to_one_clip_and_sticks(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
+    manifest = fake_run(tmp_path)  # the run's layout is "fit"
+    layouts = _capture_layouts(monkeypatch)
+    lines: list[str] = []
+    entry = rerender_clip(manifest, 1, 10, 15, log=lines.append, layout="crop")
+    assert entry["layout"] == "crop" and "crop layout" in lines[0]
+    # a later trim without a layout keeps the clip's own one
+    rerender_clip(manifest, 1, 11, 15, log=lambda _m: None)
+    # the other clip still uses the run's layout
+    rerender_clip(manifest, 2, 20, 25, log=lambda _m: None)
+    assert layouts == ["crop", "crop", "fit"]
+    data = json.loads(manifest.read_text())
+    assert data["clips"][0]["layout"] == "crop" and "layout" not in data["clips"][1]
+    assert data["render"]["layout"] == "fit"
+
+
+def test_bad_layout_is_refused_before_rendering(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
+    manifest = fake_run(tmp_path)
+    before = manifest.read_text()
+    monkeypatch.setattr(pipeline, "render", lambda *a, **k: pytest.fail("should not render"))
+    with pytest.raises(ValueError, match="layout must be one of crop, blur, fit, follow, speaker"):
+        rerender_clip(manifest, 1, 10, 15, log=lambda _m: None, layout="zoom")
+    monkeypatch.setattr(pipeline.speaker, "available", lambda: False)
+    with pytest.raises(ValueError, match="needs OpenCV"):
+        rerender_clip(manifest, 1, 10, 15, log=lambda _m: None, layout="speaker")
+    assert manifest.read_text() == before
