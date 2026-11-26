@@ -189,10 +189,12 @@ def test_queued_call_says_it_is_waiting(tmp_path: Path, monkeypatch: pytest.Monk
     video.write_bytes(b"x")
     monkeypatch.setattr(pipeline, "run", _fake_run(tmp_path, delay=0.1))
     messages: list[list[str | None]] = [[], []]
+    values: list[list[float]] = [[], []]
 
     def collector(i: int):
         async def on_progress(progress: float, total: float | None, message: str | None) -> None:
             messages[i].append(message)
+            values[i].append(progress)
         return on_progress
 
     async def two() -> None:
@@ -203,3 +205,5 @@ def test_queued_call_says_it_is_waiting(tmp_path: Path, monkeypatch: pytest.Monk
     asyncio.run(two())
     waits = [m for m in messages if m and m[0] == "waiting for another make_clips call to finish"]
     assert len(waits) == 1 and all(m[-1] == "done" for m in messages)
+    # the spec wants every notification above the last, including the first step after waiting
+    assert all(all(a < b for a, b in zip(v, v[1:], strict=False)) for v in values)

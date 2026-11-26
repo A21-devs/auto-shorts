@@ -58,10 +58,11 @@ def _stderr_log(lines: list[str]) -> pipeline.Log:
     return log
 
 
-def stage_progress(report: Report) -> pipeline.Progress:
+def stage_progress(report: Report, after: float = -1.0) -> pipeline.Progress:
     """Turns the pipeline's progress(stage, fraction) into one rising fraction for the whole run.
-    Only sends a step of at least PROGRESS_STEP (and always the end), never a step back."""
-    last = [-1.0]
+    Only sends a step of at least PROGRESS_STEP (and always the end), never a step back. MCP wants
+    every notification above the last one, so `after` is what was already sent for this call."""
+    last = [after]
 
     def progress(stage: str, fraction: float) -> None:
         span = STAGE_SPAN.get(stage)
@@ -96,11 +97,13 @@ def make_clips(video: str, count: int = 6, platform: str | None = None, layout: 
     except BadRequest as e:
         raise ToolError(str(e)) from None
     lines: list[str] = []
-    progress = stage_progress(report if report is not None else lambda _f, _m: None)
+    send = report if report is not None else lambda _f, _m: None
+    sent = -1.0
     if not _RUN_LOCK.acquire(blocking=False):
-        if report is not None:
-            report(0.0, "waiting for another make_clips call to finish")
+        sent = 0.0
+        send(sent, "waiting for another make_clips call to finish")
         _RUN_LOCK.acquire()
+    progress = stage_progress(send, after=sent)
     try:
         manifest = pipeline.run(job, log=_stderr_log(lines), progress=progress)
     finally:
