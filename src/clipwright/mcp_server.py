@@ -193,31 +193,37 @@ def list_clips(manifest: str) -> dict[str, Any]:
             "clips": out}
 
 
+def _clip(path: Path, n: int) -> dict[str, Any]:
+    clips: list[dict[str, Any]] = list_clips(str(path))["clips"]
+    if not 1 <= n <= len(clips):
+        raise ToolError(f"clip {n} doesn't exist, this run has {len(clips)}")
+    return clips[n - 1]
+
+
 def rerender_clip(manifest: str, n: int, start: float | None = None, end: float | None = None,
                   layout: str | None = None, report: Report | None = None) -> dict[str, Any]:
     """Re-renders clip n (1-based, as in list_clips) of a finished run and returns it updated.
     start/end are seconds in the source video and default to the clip's current range. layout
     (blur, crop, follow, speaker, fit) changes this clip only and is kept for later re-renders."""
     path = _manifest_path(manifest)
-    current = list_clips(str(path))["clips"]
-    if not 1 <= n <= len(current):
-        raise ToolError(f"clip {n} doesn't exist, this run has {len(current)}")
     if start is None and end is None and layout is None:
         raise ToolError("nothing to change: give start/end, layout, or both")
-    clip = current[n - 1]
+    _clip(path, n)  # fail fast on a bad manifest or n, before waiting for the lock
     lines: list[str] = []
     progress = RunProgress(report if report is not None else lambda _f, _m: None)
     if not _RUN_LOCK.acquire(blocking=False):
         progress.note("waiting for another clipwright call to finish")
         _RUN_LOCK.acquire()
     try:
+        # read again under the lock: the run we waited for may have replaced this folder's clips
+        clip = _clip(path, n)
         pipeline.rerender_clip(path, n, clip["start"] if start is None else start,
                                clip["end"] if end is None else end, log=_stderr_log(lines), layout=layout)
+        result = _clip(path, n)
     except ValueError as e:  # bad range or layout: the agent's to fix, the old clip is untouched
         raise ToolError(str(e)) from None
     finally:
         _RUN_LOCK.release()
-    result: dict[str, Any] = list_clips(str(path))["clips"][n - 1]
     result["log"] = lines[-LOG_TAIL:]
     return result
 

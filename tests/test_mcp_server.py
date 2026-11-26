@@ -394,3 +394,31 @@ def test_rerender_clip_changes_the_layout_for_real(tmp_path: Path):
     again = rerender_clip(out["manifest"], 1, end=clip["end"] - 2, layout="crop")
     assert again["layout"] == "crop" and again["end"] == pytest.approx(clip["end"] - 2)
     assert Path(again["file"]).is_file() and any("crop layout" in line for line in again["log"])
+
+
+def test_rerender_reads_the_range_after_waiting(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
+    import threading
+    import time
+
+    from clipwright import mcp_server
+
+    m = _manifest(tmp_path / "run")
+    calls: list[tuple[float, float]] = []
+    monkeypatch.setattr(pipeline, "rerender_clip",
+                        lambda manifest, n, start, end, log=print, layout=None: calls.append((start, end)))
+    notes: list[str] = []
+    mcp_server._RUN_LOCK.acquire()
+    try:
+        t = threading.Thread(target=rerender_clip, args=(str(m), 1),
+                             kwargs={"layout": "crop", "report": lambda f, msg: notes.append(msg)})
+        t.start()
+        time.sleep(0.2)
+        # the run being waited for writes new clips into the same folder
+        data = json.loads(m.read_text(encoding="utf-8"))
+        data["clips"][0].update(start=30.0, end=50.0)
+        m.write_text(json.dumps(data), encoding="utf-8")
+    finally:
+        mcp_server._RUN_LOCK.release()
+    t.join()
+    assert notes == ["waiting for another clipwright call to finish"]
+    assert calls == [(30.0, 50.0)]
