@@ -6,8 +6,8 @@ from pathlib import Path
 import pytest
 from conftest import make_video
 
-from clipwright import pipeline
-from clipwright.mcp_server import ToolError, list_clips, make_clips, stage_progress
+from clipwright import download, pipeline
+from clipwright.mcp_server import LINK_SPAN, RunProgress, ToolError, list_clips, make_clips
 
 
 def _manifest(folder: Path) -> Path:
@@ -51,7 +51,8 @@ def test_make_clips_validates_before_running(tmp_path: Path, monkeypatch: pytest
         make_clips(str(video), count=0)
     with pytest.raises(ToolError, match="layout"):
         make_clips(str(video), layout="zoom")
-    with pytest.raises(ToolError, match="links"):
+    monkeypatch.setattr(download, "available", lambda: False)
+    with pytest.raises(ToolError, match=r"links need yt-dlp: pip install \"clipwright\[link\]\""):
         make_clips("https://www.youtube.com/watch?v=abc")
 
 
@@ -116,9 +117,9 @@ def test_parallel_calls_run_one_at_a_time(tmp_path: Path, monkeypatch: pytest.Mo
     assert peak[0] == 1
 
 
-def test_stage_progress_rises_through_the_stages():
+def test_run_progress_rises_through_the_stages():
     sent: list[tuple[float, str]] = []
-    progress = stage_progress(lambda f, m: sent.append((f, m)))
+    progress = RunProgress(lambda f, m: sent.append((f, m)))
     progress("audio", 0.0)
     progress("audio", 1.0)
     progress("scenes", 0.5)
@@ -207,3 +208,130 @@ def test_queued_call_says_it_is_waiting(tmp_path: Path, monkeypatch: pytest.Monk
     assert len(waits) == 1 and all(m[-1] == "done" for m in messages)
     # the spec wants every notification above the last, including the first step after waiting
     assert all(all(a < b for a, b in zip(v, v[1:], strict=False)) for v in values)
+
+
+def test_note_stays_above_the_last_step():
+    sent: list[float] = []
+    progress = RunProgress(lambda f, m: sent.append(f), LINK_SPAN)
+    progress.note("waiting")  # nothing sent yet: starts at 0
+    progress("download", 0.5)
+    progress("download", 1.0)
+    progress.note("waiting")
+    progress("audio", 0.0)  # same value as the end of the download, dropped
+    progress("audio", 1.0)
+    progress("done", 1.0)
+    assert sent[0] == 0.0 and sent[2] == pytest.approx(0.3)
+    assert all(a < b for a, b in zip(sent, sent[1:], strict=False)) and sent[-1] == 1.0
+    assert len(sent) == 6
+
+
+def _fake_download(tmp_path: Path, calls: list[dict], srt: bool = True):
+    def fake(url: str, folder: Path, log=print, on_progress=None, subtitles=None) -> Path:
+        calls.append({"url": url, "folder": folder, "subtitles": subtitles})
+        folder.mkdir(parents=True, exist_ok=True)
+        video = folder / "Talk [abc].mp4"
+        video.write_bytes(b"x")
+        if srt and subtitles:
+            video.with_suffix(".srt").write_text("1\n00:00:01,000 --> 00:00:02,000\nhi\n", encoding="utf-8")
+        for f in (0.0, 0.5, 1.0):
+            if on_progress:
+                on_progress(f)
+        log(f"downloading {url}")
+        return video
+
+    return fake
+
+
+def test_make_clips_downloads_a_link_first(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
+    calls: list[dict] = []
+    jobs: list[pipeline.Job] = []
+    monkeypatch.setattr(download, "available", lambda: True)
+    monkeypatch.setattr(download, "download", _fake_download(tmp_path, calls))
+    fake_run = _fake_run(tmp_path)
+
+    def run(job: pipeline.Job, log: pipeline.Log = print, progress: pipeline.Progress = lambda s, f: None) -> Path:
+        jobs.append(job)
+        return fake_run(job, log, progress)
+
+    monkeypatch.setattr(pipeline, "run", run)
+    sent: list[tuple[float, str]] = []
+    out = make_clips(" https://www.youtube.com/watch?v=abc ", downloads=str(tmp_path / "dl"),
+                     report=lambda f, m: sent.append((f, m)))
+    assert calls == [{"url": "https://www.youtube.com/watch?v=abc", "folder": tmp_path / "dl", "subtitles": "en"}]
+    job = jobs[0]
+    assert job.source == tmp_path / "dl" / "Talk [abc].mp4"
+    assert job.srt == job.source.with_suffix(".srt")
+    assert job.out_dir == tmp_path / "dl" / "Talk [abc]_shorts"
+    assert job.url == "https://www.youtube.com/watch?v=abc"
+    assert sent[0] == (0.0, "download 0%") and ("download" in sent[2][1]) and sent[-1] == (1.0, "done")
+    fractions = [f for f, _ in sent]
+    assert fractions == sorted(fractions)
+    assert out["log"][0] == "downloading https://www.youtube.com/watch?v=abc"
+
+
+def test_link_without_captions_skips_subtitles_and_keeps_out(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
+    calls: list[dict] = []
+    jobs: list[pipeline.Job] = []
+    monkeypatch.setattr(download, "available", lambda: True)
+    monkeypatch.setattr(download, "download", _fake_download(tmp_path, calls))
+    fake_run = _fake_run(tmp_path)
+    monkeypatch.setattr(pipeline, "run", lambda job, log=print, progress=None: jobs.append(job) or fake_run(job))
+    monkeypatch.setattr("clipwright.mcp_server.DEFAULT_DOWNLOADS", tmp_path / "default")
+    make_clips("https://www.twitch.tv/videos/1", captions=False, out=str(tmp_path / "mine"))
+    assert calls[0]["subtitles"] is None and calls[0]["folder"] == tmp_path / "default"
+    assert jobs[0].srt is None and jobs[0].out_dir == (tmp_path / "mine").resolve()
+
+
+def test_download_error_is_reported(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
+    monkeypatch.setattr(download, "available", lambda: True)
+
+    def broken(url: str, folder: Path, **_: object) -> Path:
+        raise download.DownloadError("Video unavailable. This video is private")
+
+    monkeypatch.setattr(download, "download", broken)
+    monkeypatch.setattr(pipeline, "run", lambda *a, **k: pytest.fail("should not run"))
+    with pytest.raises(download.DownloadError, match="private"):
+        make_clips("https://www.youtube.com/watch?v=abc", downloads=str(tmp_path))
+
+
+def test_downloads_into_one_folder_run_one_at_a_time(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
+    import threading
+    import time
+
+    monkeypatch.setattr(download, "available", lambda: True)
+    active: dict[Path, int] = {}
+    peak: dict[Path, int] = {}
+    overall = [0, 0]
+    guard = threading.Lock()
+
+    def slow(url: str, folder: Path, log=print, on_progress=None, subtitles=None) -> Path:
+        with guard:
+            active[folder] = active.get(folder, 0) + 1
+            peak[folder] = max(peak.get(folder, 0), active[folder])
+            overall[0] += 1
+            overall[1] = max(overall[1], overall[0])
+        time.sleep(0.2)
+        with guard:
+            active[folder] -= 1
+            overall[0] -= 1
+        folder.mkdir(parents=True, exist_ok=True)
+        video = folder / "v.mp4"
+        video.write_bytes(b"x")
+        return video
+
+    monkeypatch.setattr(download, "download", slow)
+    monkeypatch.setattr(pipeline, "run", _fake_run(tmp_path))
+    notes: list[list[str]] = [[] for _ in range(4)]
+    folders = [tmp_path / "a", tmp_path / "a", tmp_path / "a", tmp_path / "b"]
+    threads = [threading.Thread(target=make_clips, args=("https://example.com/v",),
+                                kwargs={"downloads": str(f), "captions": False,
+                                        "out": str(tmp_path / f"out{i}"),
+                                        "report": lambda p, m, i=i: notes[i].append(m)})
+               for i, f in enumerate(folders)]
+    for t in threads:
+        t.start()
+    for t in threads:
+        t.join()
+    assert peak == {tmp_path / "a": 1, tmp_path / "b": 1}
+    assert overall[1] == 2  # a different folder doesn't wait
+    assert sum(any(m.startswith("waiting for another download") for m in n) for n in notes) == 2
