@@ -219,7 +219,7 @@ def main(argv: list[str] | None = None) -> int:
     if url is not None:
         # checked everything else first, so a typo in --max doesn't cost a 2 GB download
         try:
-            args.video = download.download(url, args.downloads,
+            args.video = download.download(url, args.downloads, log=log,
                                            subtitles=None if args.no_captions or srt else (args.language or "en"))
         except download.DownloadError as e:
             print(f"error: {e}", file=sys.stderr)
