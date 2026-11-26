@@ -100,7 +100,19 @@ clipwright stream.mp4 --copy ollama --copy-model qwen3    # a local Ollama model
 clipwright stream.mp4 --copy openai --copy-model gpt-5-mini  # OpenAI-compatible (see above)
 ```
 
-`--copy` writes a title, a short description and 3-6 hashtags for each clip from what's said in it. They go in `manifest.json` and show on the clip cards in `serve`. Only the clip's transcript text is sent, never audio or video, and nothing is sent unless you pass `--copy`. `claude` uses the account the Claude Code CLI is signed in with (`claude auth login`). If a call fails, the clip is still rendered, just without the text.
+`--copy` writes a title, a short description and 3-6 hashtags for each clip from what's said in it. They go in `manifest.json`, show on the clip cards in `serve`, and are saved as `<name>_clipNN.txt` next to the clip, ready to paste when you post. Only the clip's transcript text is sent, never audio or video, and nothing is sent unless you pass `--copy`. `claude` uses the account the Claude Code CLI is signed in with (`claude auth login`). If a call fails, the clip is still rendered, just without the text.
+
+## A whole folder at once
+
+```bash
+clipwright "D:/Videos/OBS" -n 5 --platform tiktok
+```
+
+Give it a folder instead of a file and it clips every video directly inside it, one after the other. Videos that already have clips are skipped, so you can run it again after adding more, and one video failing doesn't stop the rest. Each video uses its own `<name>.srt` if there is one.
+
+## For scripts and agents: --json
+
+`--json` prints the finished `manifest.json` on stdout (for a folder: which videos were done, skipped or failed) and moves the progress log to stderr, so `clipwright talk.mp4 --json | jq .clips` works.
 
 ## Watch a recordings folder
 

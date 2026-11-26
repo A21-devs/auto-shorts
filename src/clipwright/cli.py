@@ -4,7 +4,10 @@ from __future__ import annotations
 
 import argparse
 import io
+import json
+import subprocess
 import sys
+from collections.abc import Callable
 from pathlib import Path
 
 from . import __version__, copywriting, download, speaker
@@ -58,7 +61,8 @@ def add_job_args(p: argparse.ArgumentParser) -> None:
 
 def build_parser() -> argparse.ArgumentParser:
     p = argparse.ArgumentParser(prog="clipwright", description="Cut a long video into short clips.")
-    p.add_argument("video", help="input video file, or a link (YouTube, Twitch, ...) with clipwright[link] installed")
+    p.add_argument("video", help="input video file, a folder of videos (each one is clipped, ones that already have "
+                                 "clips are skipped), or a link (YouTube, Twitch, ...) with clipwright[link] installed")
     p.add_argument("--downloads", type=Path, default=Path("."),
                    help="where links are downloaded to (default: the current folder)")
     p.add_argument("-o", "--out", type=Path, help="output folder (default: <video name>_shorts next to the video)")
@@ -66,6 +70,9 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--srt", type=Path,
                    help="use this subtitle file instead of transcribing (default: <video name>.srt next to the "
                         "video, if there is one)")
+    p.add_argument("--json", action="store_true",
+                   help="print the finished manifest (or, for a folder, the list of runs) as JSON on stdout and "
+                        "send the progress log to stderr, for scripts and agents")
     p.add_argument("--version", action="version", version=f"clipwright {__version__}")
     return p
 
@@ -193,6 +200,9 @@ def main(argv: list[str] | None = None) -> int:
     args = build_parser().parse_args(argv)
     url = args.video if download.is_url(args.video) else None
     args.video = Path(args.video)
+    log = _stderr if args.json else print
+    if url is None and args.video.is_dir():
+        return batch_main(args, log)
     if url is None and not args.video.is_file():
         print(f"error: {args.video} not found", file=sys.stderr)
         return 2
@@ -218,12 +228,61 @@ def main(argv: list[str] | None = None) -> int:
         srt = sidecar(args.video)
     job = job_from_args(args, args.video, args.out, srt, url)
     try:
-        manifest = run(job)
+        manifest = run(job, log=log)
     except ToolMissing as e:
         print(f"error: {e}", file=sys.stderr)
         return 3
-    print(f"\ndone: {manifest.parent}")
+    if args.json:
+        print(manifest.read_text(encoding="utf-8"))
+    else:
+        print(f"\ndone: {manifest.parent}")
     return 0
+
+
+def _stderr(msg: str) -> None:
+    print(msg, file=sys.stderr)
+
+
+def batch_main(args: argparse.Namespace, log: Callable[[str], None]) -> int:
+    """`clipwright FOLDER`: clip every video directly inside it, one after the other. Videos that
+    already have clips are skipped (same check as `watch`), and one failure doesn't stop the rest."""
+    from . import watch
+
+    if args.srt is not None:
+        print("error: --srt is for one video; in a folder each video uses its own <name>.srt", file=sys.stderr)
+        return 2
+    if (err := check_job_args(args)) is not None:
+        print(f"error: {err}", file=sys.stderr)
+        return 2
+    videos = sorted(p for p in args.video.iterdir() if p.is_file() and watch.is_candidate(p))
+    if not videos:
+        print(f"error: no videos in {args.video}", file=sys.stderr)
+        return 2
+    done: list[dict[str, object]] = []
+    failed = skipped = 0
+    for n, video in enumerate(videos, 1):
+        out_dir = watch.out_dir_for(video, args.out)
+        if watch.already_done(video, out_dir):
+            log(f"({n}/{len(videos)}) {video.name}: already has clips, skipping")
+            skipped += 1
+            continue
+        log(f"({n}/{len(videos)}) {video.name}")
+        srt = None if args.no_captions else sidecar(video)
+        try:
+            manifest = run(job_from_args(args, video, out_dir, srt), log=log)
+        except ToolMissing as e:
+            print(f"error: {e}", file=sys.stderr)
+            return 3
+        except (RuntimeError, OSError, ValueError, subprocess.CalledProcessError) as e:
+            failed += 1
+            log(f"failed: {video.name}: {str(e).splitlines()[0] if str(e) else type(e).__name__}\n")
+            continue
+        done.append({"video": str(video), "manifest": str(manifest)})
+        log(f"done: {manifest.parent}\n")
+    log(f"{len(done)} done, {skipped} skipped, {failed} failed")
+    if args.json:
+        print(json.dumps({"done": done, "skipped": skipped, "failed": failed}, indent=2))
+    return 1 if failed else 0
 
 
 if __name__ == "__main__":
