@@ -35,7 +35,7 @@ from pathlib import Path
 from typing import Any
 from urllib.parse import unquote
 
-from . import download
+from . import copywriting, download
 from .pipeline import Job, check_layout, mark_clip, rerender_clip, run
 from .platforms import aspect_for, lengths
 from .render import ASPECTS, RenderOptions
@@ -150,6 +150,11 @@ def parse_job(body: dict[str, Any]) -> Job:
     jump = body.get("jumpcut", False)
     if not isinstance(jump, bool):
         raise BadRequest("jumpcut must be true or false")
+    pick = body.get("pick")
+    if pick is not None and pick not in copywriting.BACKENDS:
+        raise BadRequest(f"pick must be one of {', '.join(copywriting.BACKENDS)}")
+    if pick and not captions:
+        raise BadRequest("pick reads the transcript, so it needs captions on")
     model = body.get("model", "small")
     if not isinstance(model, str) or not MODEL_NAME.fullmatch(model):
         raise BadRequest("model must be a whisper model name like small or large-v3")
@@ -169,6 +174,7 @@ def parse_job(body: dict[str, Any]) -> Job:
         srt=sidecar(src) if captions and url is None else None,
         platform=platform,
         url=url,
+        pick=pick,
     )
 
 

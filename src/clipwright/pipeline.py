@@ -14,7 +14,7 @@ from typing import Any, NamedTuple
 
 import numpy as np
 
-from . import audio, copywriting, jumpcut, platforms, scenes, segment, speaker, subtitles, thumbnail, transcribe
+from . import aipick, audio, copywriting, jumpcut, platforms, scenes, segment, speaker, subtitles, thumbnail, transcribe
 from .captions import CaptionStyle, build_ass, build_srt
 from .probe import MediaInfo, probe
 from .render import LAYOUTS, Layout, RenderOptions, frame_size, render
@@ -44,9 +44,12 @@ class Job:
     platform: str | None = None
     # the link the source was downloaded from, kept in the manifest
     url: str | None = None
-    # write a title, description and hashtags per clip with a local AI: "claude" or "ollama"
+    # write a title, description and hashtags per clip with an AI: a copywriting.BACKENDS name
     copy: str | None = None
-    copy_model: str = copywriting.DEFAULT_OLLAMA_MODEL  # for ollama
+    # model name for the ollama and openai backends (None: ollama's default, openai's from the environment)
+    copy_model: str | None = None
+    # let an AI rate a shortlist of moments by their transcript (aipick.py): a copywriting.BACKENDS name
+    pick: str | None = None
 
 
 def _no_progress(_stage: str, _fraction: float) -> None:
@@ -200,7 +203,14 @@ def run(job: Job, log: Log = print, progress: Progress = _no_progress) -> Path:
     info = probe(job.source)
     log(f"{info.path.name}: {info.duration / 60:.1f} min, {info.width}x{info.height} @ {info.fps:.0f}fps")
     sig, words = analyze(info, job, log, progress)
-    clips = segment.find_clips(sig, job.clips)
+    if job.pick:
+        backend, model = job.pick, job.copy_model
+        clips = aipick.find_clips(
+            sig, job.clips, words,
+            lambda prompt, system, schema: copywriting.ask_json(backend, prompt, system, schema, model),
+            job.platform, log)
+    else:
+        clips = segment.find_clips(sig, job.clips)
     if not clips:
         raise RuntimeError("no clips found, is the video shorter than --min?")
 
@@ -246,7 +256,7 @@ def run(job: Job, log: Log = print, progress: Progress = _no_progress) -> Path:
 
     manifest = out_dir / "manifest.json"
     _write_manifest(manifest, {"source": str(info.path), "duration": info.duration, "platform": job.platform,
-                               "url": job.url,
+                               "url": job.url, "pick": job.pick,
                                "render": asdict(job.render),
                                "words": words_file, "clips": results})
     progress("done", 1.0)

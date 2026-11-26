@@ -34,11 +34,16 @@ def add_job_args(p: argparse.ArgumentParser) -> None:
     p.add_argument("--no-captions", action="store_true", help="skip transcription and captions")
     p.add_argument("--jumpcut", action="store_true",
                    help="cut out pauses longer than 0.5s inside each clip (captions are retimed to match)")
+    p.add_argument("--pick", choices=copywriting.BACKENDS,
+                   help="let an AI read the transcript of the best candidate moments and help choose the clips: "
+                        "claude (Claude Code CLI, no API key), ollama, or openai (LM Studio or any OpenAI-compatible "
+                        "server, see CLIPWRIGHT_OPENAI_URL). Only transcript text is sent")
     p.add_argument("--copy", choices=copywriting.BACKENDS,
-                   help="write a title, description and hashtags for each clip with a local AI: claude (the "
-                        "Claude Code CLI, no API key) or ollama. Only the clip's transcript is sent")
-    p.add_argument("--copy-model", default=copywriting.DEFAULT_OLLAMA_MODEL,
-                   help=f"Ollama model for --copy ollama (default {copywriting.DEFAULT_OLLAMA_MODEL})")
+                   help="write a title, description and hashtags for each clip with an AI (same choices as "
+                        "--pick). Only the clip's transcript is sent")
+    p.add_argument("--copy-model", default=None,
+                   help=f"model for ollama or openai with --copy/--pick (ollama default "
+                        f"{copywriting.DEFAULT_OLLAMA_MODEL}, openai default $CLIPWRIGHT_OPENAI_MODEL)")
     p.add_argument("--model", default="small", help="whisper model size (tiny, base, small, medium, large-v3)")
     p.add_argument("--language", help="force a language code like en (default: auto detect)")
     p.add_argument("--encoder", default="auto", help="auto, h264_nvenc or libx264")
@@ -65,6 +70,8 @@ def check_job_args(args: argparse.Namespace) -> str | None:
         return '--layout speaker needs OpenCV: pip install "clipwright[speaker]"'
     if args.copy and args.no_captions:
         return "--copy writes from the transcript, so it can't be used with --no-captions"
+    if args.pick and args.no_captions:
+        return "--pick reads the transcript, so it can't be used with --no-captions"
     if args.count < 1:
         return "--count must be at least 1"
     try:
@@ -92,6 +99,7 @@ def job_from_args(args: argparse.Namespace, video: Path, out_dir: Path | None, s
         url=url,
         copy=args.copy,
         copy_model=args.copy_model,
+        pick=args.pick,
     )
 
 
