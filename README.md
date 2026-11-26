@@ -71,11 +71,24 @@ Anything [yt-dlp](https://github.com/yt-dlp/yt-dlp) can download works (YouTube,
 
 If there's a `talk.srt` next to `talk.mp4` it's used instead of Whisper, which skips the slowest step. Or point at one with `--srt path/to/file.srt`. SRT only has timings per line, so each line's time is spread over its words by length for the word highlight.
 
+## Let an AI help pick the clips (optional)
+
+```bash
+clipwright podcast.mp4 -n 6 --pick claude                  # Claude Code CLI, no API key
+clipwright podcast.mp4 --pick ollama --copy-model qwen3     # a local Ollama model
+clipwright podcast.mp4 --pick openai --copy-model qwen3-8b  # LM Studio, or any OpenAI-compatible server
+```
+
+Loudness and scene cuts are good at finding where something happens, not at telling whether what's said works on its own. With `--pick`, clipwright takes a shortlist of the best moments by signal (3x as many as you asked for), sends their transcripts to the model, and asks it to rate each one as a standalone short: does it hook, does it make sense without the rest, does it pay off. The final pick blends the two, and each clip's reasons in `manifest.json` and on the review page say what the model thought ("AI 8/10: clear story with a punchline"). Only transcript text is sent. If the model can't be reached the run goes on with the normal pick.
+
+`openai` talks to LM Studio's local server (`http://127.0.0.1:1234/v1`) by default. Point it anywhere else that speaks the OpenAI chat API (OpenAI, OpenRouter, vLLM, llama.cpp) with `CLIPWRIGHT_OPENAI_URL`, and set `OPENAI_API_KEY` if that server needs one. The model is `--copy-model` or `CLIPWRIGHT_OPENAI_MODEL`. `--copy` takes the same three backends.
+
 ## Titles and hashtags (optional AI)
 
 ```bash
 clipwright stream.mp4 --platform tiktok --copy claude     # Claude Code CLI, no API key
 clipwright stream.mp4 --copy ollama --copy-model qwen3    # a local Ollama model
+clipwright stream.mp4 --copy openai --copy-model gpt-5-mini  # OpenAI-compatible (see above)
 ```
 
 `--copy` writes a title, a short description and 3-6 hashtags for each clip from what's said in it. They go in `manifest.json` and show on the clip cards in `serve`. Only the clip's transcript text is sent, never audio or video, and nothing is sent unless you pass `--copy`. `claude` uses the account the Claude Code CLI is signed in with (`claude auth login`). If a call fails, the clip is still rendered, just without the text.
