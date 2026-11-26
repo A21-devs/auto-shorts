@@ -49,6 +49,19 @@ def test_jumpcut_removes_the_pauses_and_keeps_av_in_sync(tmp_path: Path):
     assert any("under --min 20s" in line for line in lines)
 
 
+def test_short_video_without_jumpcut_has_no_pause_warning(tmp_path: Path):
+    src = tmp_path / "short.mp4"
+    subprocess.run(["ffmpeg", "-v", "error", "-y", "-f", "lavfi", "-i", "testsrc2=s=320x180:r=10:d=12",
+                    "-f", "lavfi", "-i", "sine=f=300:d=12", "-c:v", "libx264", "-preset", "ultrafast",
+                    "-c:a", "aac", "-shortest", str(src)], check=True)
+    job = Job(source=src, out_dir=tmp_path / "out", clips=Options(count=1, min_len=20, max_len=30),
+              render=RenderOptions(encoder="libx264"), captions=False)
+    lines: list[str] = []
+    run(job, log=lines.append)
+    assert any("whole video is shorter than one clip" in line for line in lines)
+    assert not any("after cutting pauses" in line for line in lines)
+
+
 def test_no_audio_means_no_cuts(tmp_path: Path):
     src = tmp_path / "mute.mp4"
     subprocess.run(["ffmpeg", "-v", "error", "-y", "-f", "lavfi", "-i", "testsrc2=s=320x180:r=10:d=3",

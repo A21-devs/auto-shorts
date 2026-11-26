@@ -227,8 +227,9 @@ def run(job: Job, log: Log = print, progress: Progress = _no_progress) -> Path:
         cut = clip.duration - length
         log(f"         rendered {name} in {time.perf_counter() - t:.1f}s"
             + (f", cut {cut:.1f}s of pauses ({length:.1f}s left)" if cut > 0.05 else ""))
-        if length < job.clips.min_len - 0.05:
-            # clips are picked by range length, the cuts happen after that
+        if cut > 0.05 and length < job.clips.min_len - 0.05:
+            # clips are picked by range length, the cuts happen after that. Without cuts a clip
+            # can only be under --min when the whole video is, which the pick already says.
             log(f"         warning: {name} is {length:.1f}s after cutting pauses, under --min {job.clips.min_len:g}s")
         entry = {**asdict(clip), "file": name, "subtitles": r.subtitles, "srt": r.srt,
                  "thumbnail": r.thumbnail, "length": length}
