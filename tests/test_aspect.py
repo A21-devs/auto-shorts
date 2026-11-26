@@ -107,4 +107,4 @@ def test_renders_at_the_chosen_aspect(tmp_path: Path, aspect: str):
     assert manifest["render"]["aspect"] == aspect
     out = probe(tmp_path / "out" / clip["file"])
     assert (out.width, out.height) == frame_size(aspect)
-    assert "PlayResX: %d" % frame_size(aspect)[0] in (tmp_path / "out" / clip["subtitles"]).read_text()
+    assert f"PlayResX: {frame_size(aspect)[0]}" in (tmp_path / "out" / clip["subtitles"]).read_text()
