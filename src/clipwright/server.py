@@ -103,6 +103,10 @@ def _num(body: dict[str, Any], key: str, default: float, lo: float, hi: float) -
     return float(v)
 
 
+# where pasted links are downloaded to unless --downloads says otherwise (also used by the MCP server)
+DEFAULT_DOWNLOADS = Path.home() / "Videos" / "clipwright"
+
+
 def parse_job(body: dict[str, Any]) -> Job:
     """Validates a POST /api/jobs body into a Job. Same defaults and limits as the CLI."""
     video = body.get("video")
@@ -171,7 +175,7 @@ class App:
 
     def __init__(self, downloads: Path | None = None) -> None:
         # where pasted links are downloaded to
-        self.downloads = downloads or Path.home() / "Videos" / "clipwright"
+        self.downloads = downloads or DEFAULT_DOWNLOADS
         self.jobs: dict[str, JobState] = {}
         self._lock = threading.Lock()  # submit() runs on request threads
         self._queue: queue.Queue[JobState] = queue.Queue()

@@ -11,6 +11,7 @@ goes to stderr and is also returned to the agent with the result.
 
 `make_clips` sends progress notifications (when the client asks for them with a progress token),
 so a long run, or one queued behind another, doesn't look hung and hit the client's timeout.
+It also takes links (needs `clipwright[link]`), downloaded like `serve` does.
 """
 
 from __future__ import annotations
@@ -20,11 +21,13 @@ import json
 import sys
 import threading
 from collections.abc import Callable
+from dataclasses import replace
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
 from . import download, pipeline
-from .server import BadRequest, parse_job
+from .server import DEFAULT_DOWNLOADS, BadRequest, parse_job
+from .subtitles import sidecar
 
 if TYPE_CHECKING:
     from mcp.server.mcpserver import MCPServer
@@ -40,6 +43,11 @@ _RUN_LOCK = threading.Lock()
 # time on a long video with captions; without captions "transcribe" is skipped and progress jumps.
 STAGE_SPAN = {"audio": (0.0, 0.05), "scenes": (0.05, 0.25), "transcribe": (0.25, 0.55),
               "render": (0.55, 0.99), "done": (1.0, 1.0)}
+# A link spends a good part of the run downloading (a VOD is gigabytes), the rest is scaled after it.
+DOWNLOAD_SHARE = 0.3
+LINK_SPAN = {"download": (0.0, DOWNLOAD_SHARE),
+             **{k: (DOWNLOAD_SHARE + (1 - DOWNLOAD_SHARE) * lo, DOWNLOAD_SHARE + (1 - DOWNLOAD_SHARE) * hi)
+                for k, (lo, hi) in STAGE_SPAN.items()}}
 PROGRESS_STEP = 0.01  # whisper reports every segment; don't send a notification for each one
 
 # progress(fraction of the whole run, message)
@@ -58,34 +66,39 @@ def _stderr_log(lines: list[str]) -> pipeline.Log:
     return log
 
 
-def stage_progress(report: Report, after: float = -1.0) -> pipeline.Progress:
-    """Turns the pipeline's progress(stage, fraction) into one rising fraction for the whole run.
-    Only sends a step of at least PROGRESS_STEP (and always the end), never a step back. MCP wants
-    every notification above the last one, so `after` is what was already sent for this call."""
-    last = [after]
+class RunProgress:
+    """Turns progress(stage, fraction) from the download and the pipeline into one rising fraction
+    for the whole call. Only sends a step of at least PROGRESS_STEP (and always the end), never a
+    step back: MCP wants every notification's progress above the one before."""
 
-    def progress(stage: str, fraction: float) -> None:
-        span = STAGE_SPAN.get(stage)
+    def __init__(self, report: Report, spans: dict[str, tuple[float, float]] = STAGE_SPAN) -> None:
+        self.report, self.spans, self.last = report, spans, -1.0
+
+    def __call__(self, stage: str, fraction: float) -> None:
+        span = self.spans.get(stage)
         if span is None:
             return
         lo, hi = span
         overall = lo + (hi - lo) * min(max(fraction, 0.0), 1.0)
-        if overall < last[0] + PROGRESS_STEP and not (overall >= 1.0 > last[0]):
+        if overall < self.last + PROGRESS_STEP and not (overall >= 1.0 > self.last):
             return
-        last[0] = overall
-        report(overall, stage if stage == "done" else f"{stage} {fraction:.0%}")
+        self.last = overall
+        self.report(overall, stage if stage == "done" else f"{stage} {fraction:.0%}")
 
-    return progress
+    def note(self, message: str) -> None:
+        """A message between steps, sent just above the last value so it still counts as progress."""
+        self.last = max(self.last + PROGRESS_STEP / 10, 0.0)
+        self.report(self.last, message)
 
 
 def make_clips(video: str, count: int = 6, platform: str | None = None, layout: str = "blur",
                captions: bool = True, jumpcut: bool = False, model: str = "small",
-               out: str | None = None, report: Report | None = None) -> dict[str, Any]:
-    """Cuts a local video into vertical shorts and returns where they are plus each clip's range,
-    score and files. Blocks until the run is done (minutes for a long video) and reports progress
-    while it runs."""
-    if download.is_url(video.strip().strip('"')):
-        raise ToolError("links aren't supported here yet, download the video and pass its path")
+               out: str | None = None, downloads: str | None = None,
+               report: Report | None = None) -> dict[str, Any]:
+    """Cuts a video into vertical shorts and returns where they are plus each clip's range,
+    score and files. `video` is a local file or a link (YouTube, Twitch, ...), which is downloaded
+    into `downloads` (default: Videos/clipwright) with its subtitles first. Blocks until the run is
+    done (minutes for a long video) and reports progress while it runs."""
     body: dict[str, Any] = {"video": video, "count": count, "layout": layout, "captions": captions,
                             "jumpcut": jumpcut, "model": model}
     if platform is not None:
@@ -97,20 +110,34 @@ def make_clips(video: str, count: int = 6, platform: str | None = None, layout: 
     except BadRequest as e:
         raise ToolError(str(e)) from None
     lines: list[str] = []
-    send = report if report is not None else lambda _f, _m: None
-    sent = -1.0
+    log = _stderr_log(lines)
+    progress = RunProgress(report if report is not None else lambda _f, _m: None,
+                           LINK_SPAN if job.url is not None else STAGE_SPAN)
+    if job.url is not None:
+        # outside the lock: a download doesn't fight over the GPU, a queued call can fetch meanwhile
+        job = _fetch(job, Path(downloads).expanduser() if downloads else DEFAULT_DOWNLOADS, log, progress)
     if not _RUN_LOCK.acquire(blocking=False):
-        sent = 0.0
-        send(sent, "waiting for another make_clips call to finish")
+        progress.note("waiting for another make_clips call to finish")
         _RUN_LOCK.acquire()
-    progress = stage_progress(send, after=sent)
     try:
-        manifest = pipeline.run(job, log=_stderr_log(lines), progress=progress)
+        manifest = pipeline.run(job, log=log, progress=progress)
     finally:
         _RUN_LOCK.release()
     result = list_clips(str(manifest))
     result["log"] = lines[-LOG_TAIL:]
     return result
+
+
+def _fetch(job: pipeline.Job, folder: Path, log: pipeline.Log, progress: RunProgress) -> pipeline.Job:
+    """Downloads a link job's video (and subtitles when captions are on, like the CLI and serve)
+    and points the job at the file."""
+    assert job.url is not None
+    lang = (job.language or "en") if job.captions else None
+    path = download.download(job.url, folder, log=log, on_progress=lambda f: progress("download", f),
+                             subtitles=lang)
+    progress("download", 1.0)
+    return replace(job, source=path, out_dir=job.out_dir or path.with_name(f"{path.stem}_shorts"),
+                   srt=sidecar(path) if job.captions else None)
 
 
 def list_clips(manifest: str) -> dict[str, Any]:
@@ -188,13 +215,14 @@ def _make_clips_tool() -> Callable[..., dict[str, Any]]:
 
     def tool(video: str, count: int = 6, platform: str | None = None, layout: str = "blur",
              captions: bool = True, jumpcut: bool = False, model: str = "small",
-             out: str | None = None, ctx: Context | None = None) -> dict[str, Any]:
+             out: str | None = None, downloads: str | None = None,
+             ctx: Context | None = None) -> dict[str, Any]:
         report: Report | None = None
         if ctx is not None and _in_request(ctx):
             def report(fraction: float, message: str) -> None:
                 anyio.from_thread.run(ctx.report_progress, fraction, 1.0, message)
         return make_clips(video, count=count, platform=platform, layout=layout, captions=captions,
-                          jumpcut=jumpcut, model=model, out=out, report=report)
+                          jumpcut=jumpcut, model=model, out=out, downloads=downloads, report=report)
 
     tool.__annotations__["ctx"] = Context | None
     return tool
