@@ -220,15 +220,15 @@ class App:
         st.out_dir = out_dir
 
     def _fetch(self, st: JobState) -> None:
-        """Downloads a link job's video and fills in its source, subtitles and output folder."""
+        """Downloads a link job's video and fills in its source, subtitles and output folder.
+        The folder is claimed later by execute(), on the worker: a job that runs into the same
+        folder may still be running now, and this one should wait its turn, not fail."""
         job = st.job
         assert job.url is not None
         lang = (job.language or "en") if job.captions else None
         path = download.download(job.url, self.downloads, log=st.add_log,
                                  on_progress=lambda f: st.set_progress("download", f), subtitles=lang)
         out_dir = job.out_dir or path.with_name(f"{path.stem}_shorts")
-        with self._lock:
-            self._claim(st, out_dir)
         st.video = str(path)
         st.job = replace(job, source=path, out_dir=out_dir, srt=sidecar(path) if job.captions else None)
 
@@ -282,6 +282,10 @@ class App:
                 return
         st.state = "running"
         try:
+            if st.out_dir is None:  # a link's folder, known since the download
+                assert st.job.out_dir is not None
+                with self._lock:
+                    self._claim(st, st.job.out_dir)
             with st.lock:
                 manifest = run(st.job, log=st.add_log, progress=st.set_progress)
                 st.manifest = json.loads(manifest.read_text(encoding="utf-8"))

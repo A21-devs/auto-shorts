@@ -552,3 +552,31 @@ def test_failed_download_ends_in_error_and_frees_the_folder(tmp_path: Path, monk
     video = tmp_path / "local.mp4"
     video.write_bytes(b"x")
     app.submit(parse_job({"video": str(video), "out": str(out)}))  # no longer busy
+
+
+def test_same_link_twice_waits_for_the_first_run(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
+    import time
+
+    fake_link_download(tmp_path, monkeypatch)
+    started = threading.Event()
+
+    def blocking_run(job: Job, log, progress) -> Path:
+        started.set()
+        assert release.wait(5)
+        return fake_run(job, log, progress)
+
+    monkeypatch.setattr(server, "run", blocking_run)
+    release.clear()
+    app = App(downloads=tmp_path / "dl")
+    first = app.submit(parse_job({"video": "https://x.test/v"}))
+    assert started.wait(5)
+    second = app.submit(parse_job({"video": "https://x.test/v", "count": 2}))  # redo with other settings
+    deadline = time.time() + 5
+    while second.state == "downloading" and time.time() < deadline:
+        time.sleep(0.02)
+    assert first.state == "running" and second.state == "queued", second.error
+    release.set()
+    while second.state != "done" and time.time() < deadline:
+        time.sleep(0.02)
+    assert second.state == "done", second.error
+    assert first.superseded_by == second.id and second.out_dir == first.out_dir
