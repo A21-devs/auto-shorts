@@ -49,7 +49,7 @@ def test_make_clips_validates_before_running(tmp_path: Path, monkeypatch: pytest
     video.write_bytes(b"x")
     with pytest.raises(ToolError, match="count"):
         make_clips(str(video), count=0)
-    with pytest.raises(ToolError, match="layout"):
+    with pytest.raises(ToolError, match="layout must be one of blur, crop, follow, speaker, fit"):
         make_clips(str(video), layout="zoom")
     monkeypatch.setattr(download, "available", lambda: False)
     with pytest.raises(ToolError, match=r"links need yt-dlp: pip install \"clipwright\[link\]\""):

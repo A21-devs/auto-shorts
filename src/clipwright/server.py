@@ -35,8 +35,8 @@ from pathlib import Path
 from typing import Any
 from urllib.parse import unquote
 
-from . import download, speaker
-from .pipeline import Job, mark_clip, rerender_clip, run
+from . import download
+from .pipeline import Job, check_layout, mark_clip, rerender_clip, run
 from .platforms import lengths
 from .render import RenderOptions
 from .segment import Options
@@ -48,7 +48,6 @@ LOG_LINES = 200
 CHUNK = 256 * 1024
 KEEP_WAIT = 2.0  # seconds a keep/drop waits for another edit of the same job to finish
 MODEL_NAME = re.compile(r"[A-Za-z0-9._-]{1,40}")
-LAYOUTS = ("blur", "crop", "follow", "speaker", "fit")
 
 
 class BadRequest(ValueError):
@@ -137,10 +136,10 @@ def parse_job(body: dict[str, Any]) -> Job:
     if max_len < min_len:
         raise BadRequest("max must be >= min")
     layout = body.get("layout", "blur")
-    if layout not in LAYOUTS:
-        raise BadRequest(f"layout must be one of {', '.join(LAYOUTS)}")
-    if layout == "speaker" and not speaker.available():
-        raise BadRequest('the speaker layout needs OpenCV: pip install "clipwright[speaker]"')
+    try:
+        layout = check_layout(layout)
+    except ValueError as e:
+        raise BadRequest(str(e)) from None
     captions = body.get("captions", True)
     if not isinstance(captions, bool):
         raise BadRequest("captions must be true or false")

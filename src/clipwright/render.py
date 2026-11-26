@@ -15,6 +15,8 @@ from . import follow, jumpcut, motion, speaker
 from .probe import MediaInfo, require
 
 Layout = Literal["crop", "blur", "fit", "follow", "speaker"]
+# every layout, in the order the CLI, the review page and error messages list them (blur is the default)
+LAYOUTS: tuple[Layout, ...] = ("blur", "crop", "follow", "speaker", "fit")
 PANNED: tuple[Layout, ...] = ("follow", "speaker")  # layouts that move a 9:16 crop window over time
 
 W, H = 1080, 1920

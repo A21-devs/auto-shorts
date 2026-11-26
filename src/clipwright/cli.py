@@ -11,7 +11,7 @@ from . import __version__, copywriting, download, speaker
 from .pipeline import Job, run
 from .platforms import PLATFORMS, lengths
 from .probe import ToolMissing, require
-from .render import RenderOptions
+from .render import LAYOUTS, RenderOptions
 from .segment import Options
 from .subtitles import sidecar
 
@@ -24,7 +24,7 @@ def add_job_args(p: argparse.ArgumentParser) -> None:
                         + ", ".join(f"{k} {v.min_len:g}-{v.max_len:g}s" for k, v in PLATFORMS.items()))
     p.add_argument("--min", dest="min_len", type=float, help="shortest clip in seconds (default 20, or the platform's)")
     p.add_argument("--max", dest="max_len", type=float, help="longest clip in seconds (default 55, or the platform's)")
-    p.add_argument("--layout", choices=["blur", "crop", "follow", "speaker", "fit"], default="blur",
+    p.add_argument("--layout", choices=LAYOUTS, default="blur",
                    help="blur = video on a blurred background, crop = fill the frame, "
                         "follow = fill the frame and pan toward the action, speaker = fill the frame and cut to "
                         "whoever is talking (podcasts, interviews; needs clipwright[speaker]), fit = black bars")

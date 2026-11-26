@@ -10,14 +10,14 @@ import time
 from collections.abc import Callable
 from dataclasses import asdict, dataclass, field, fields, replace
 from pathlib import Path
-from typing import Any, NamedTuple, get_args
+from typing import Any, NamedTuple
 
 import numpy as np
 
 from . import audio, copywriting, jumpcut, platforms, scenes, segment, speaker, subtitles, thumbnail, transcribe
 from .captions import CaptionStyle, build_ass, build_srt
 from .probe import MediaInfo, probe
-from .render import Layout, RenderOptions, render
+from .render import LAYOUTS, Layout, RenderOptions, render
 
 Log = Callable[[str], None]
 # (stage, fraction of that stage done). Stages in order: audio, scenes, transcribe (only with
@@ -258,13 +258,14 @@ def _render_options(saved: dict[str, Any] | None) -> RenderOptions:
     return RenderOptions(**{k: v for k, v in (saved or {}).items() if k in known})
 
 
-def check_layout(layout: str) -> Layout:
+def check_layout(layout: object) -> Layout:
     """`layout` as a Layout, or ValueError with what's wrong (unknown, or speaker without OpenCV)."""
-    if layout not in get_args(Layout):
-        raise ValueError(f"layout must be one of {', '.join(get_args(Layout))}")
-    if layout == "speaker" and not speaker.available():
-        raise ValueError('the speaker layout needs OpenCV: pip install "clipwright[speaker]"')
-    return layout  # type: ignore[return-value]  # checked against the Literal's values above
+    for known in LAYOUTS:
+        if layout == known:
+            if known == "speaker" and not speaker.available():
+                raise ValueError('the speaker layout needs OpenCV: pip install "clipwright[speaker]"')
+            return known
+    raise ValueError(f"layout must be one of {', '.join(LAYOUTS)}")
 
 
 def rerender_clip(manifest: Path, n: int, start: float, end: float, log: Log = print,

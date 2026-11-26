@@ -226,7 +226,7 @@ def test_bad_layout_is_refused_before_rendering(tmp_path: Path, monkeypatch: pyt
     manifest = fake_run(tmp_path)
     before = manifest.read_text()
     monkeypatch.setattr(pipeline, "render", lambda *a, **k: pytest.fail("should not render"))
-    with pytest.raises(ValueError, match="layout must be one of crop, blur, fit, follow, speaker"):
+    with pytest.raises(ValueError, match="layout must be one of blur, crop, follow, speaker, fit"):
         rerender_clip(manifest, 1, 10, 15, log=lambda _m: None, layout="zoom")
     monkeypatch.setattr(pipeline.speaker, "available", lambda: False)
     with pytest.raises(ValueError, match="needs OpenCV"):
