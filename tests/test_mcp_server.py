@@ -7,7 +7,7 @@ import pytest
 from conftest import make_video
 
 from clipwright import download, pipeline
-from clipwright.mcp_server import LINK_SPAN, RunProgress, ToolError, list_clips, make_clips
+from clipwright.mcp_server import LINK_SPAN, RunProgress, ToolError, list_clips, make_clips, rerender_clip
 
 
 def _manifest(folder: Path) -> Path:
@@ -77,7 +77,7 @@ def test_server_lists_tools_and_passes_errors_on(tmp_path: Path):
 
     server = build_server()
     names = {t.name for t in asyncio.run(server.list_tools())}
-    assert names == {"make_clips", "list_clips"}
+    assert names == {"make_clips", "list_clips", "rerender_clip"}
     with pytest.raises(SdkToolError, match="not found"):
         asyncio.run(server.call_tool("list_clips", {"manifest": str(tmp_path / "nope.json")}))
 
@@ -335,3 +335,90 @@ def test_downloads_into_one_folder_run_one_at_a_time(tmp_path: Path, monkeypatch
     assert peak == {tmp_path / "a": 1, tmp_path / "b": 1}
     assert overall[1] == 2  # a different folder doesn't wait
     assert sum(any(m.startswith("waiting for another download") for m in n) for n in notes) == 2
+
+
+
+def test_list_clips_shows_each_clip_layout(tmp_path: Path):
+    m = _manifest(tmp_path / "run")
+    data = json.loads(m.read_text(encoding="utf-8"))
+    data["render"] = {"layout": "fit"}
+    data["clips"][1]["layout"] = "crop"
+    m.write_text(json.dumps(data), encoding="utf-8")
+    assert [c["layout"] for c in list_clips(str(m))["clips"]] == ["fit", "crop"]
+    del data["render"]  # manifests from before render options were saved
+    m.write_text(json.dumps(data), encoding="utf-8")
+    assert list_clips(str(m))["clips"][0]["layout"] == "blur"
+
+
+def test_rerender_clip_fills_in_the_current_range(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
+    m = _manifest(tmp_path / "run")
+    calls: list[tuple] = []
+
+    def fake(manifest: Path, n: int, start: float, end: float, log=print, layout=None) -> dict:
+        calls.append((manifest, n, start, end, layout))
+        log("re-rendering")
+        data = json.loads(manifest.read_text(encoding="utf-8"))
+        data["clips"][n - 1].update(start=start, end=end, layout=layout or data["clips"][n - 1].get("layout"))
+        manifest.write_text(json.dumps(data), encoding="utf-8")
+        return data["clips"][n - 1]
+
+    monkeypatch.setattr(pipeline, "rerender_clip", fake)
+    out = rerender_clip(str(m.parent), 1, layout="crop")
+    assert calls[-1] == (m, 1, 1.0, 21.5, "crop")
+    assert out["n"] == 1 and out["layout"] == "crop" and out["log"] == ["re-rendering"]
+    out = rerender_clip(str(m), 2, start=42.0)
+    assert calls[-1] == (m, 2, 42.0, 60.0, None) and out["start"] == 42.0
+
+
+def test_rerender_clip_errors(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
+    m = _manifest(tmp_path / "run")
+    monkeypatch.setattr(pipeline, "render", lambda *a, **k: pytest.fail("should not render"))
+    with pytest.raises(ToolError, match="clip 3 doesn't exist, this run has 2"):
+        rerender_clip(str(m), 3, layout="crop")
+    with pytest.raises(ToolError, match="nothing to change"):
+        rerender_clip(str(m), 1)
+    with pytest.raises(ToolError, match="layout must be one of"):
+        rerender_clip(str(m), 1, layout="zoom")
+    with pytest.raises(ToolError, match="not found"):
+        rerender_clip(str(tmp_path / "nope"), 1, layout="crop")
+
+
+@pytest.mark.ffmpeg
+@pytest.mark.skipif(shutil.which("ffmpeg") is None, reason="needs ffmpeg")
+def test_rerender_clip_changes_the_layout_for_real(tmp_path: Path):
+    video = tmp_path / "talk.mp4"
+    make_video(video, duration=40)
+    out = make_clips(str(video), count=1, captions=False, layout="fit", out=str(tmp_path / "out"))
+    clip = out["clips"][0]
+    assert clip["layout"] == "fit"
+    again = rerender_clip(out["manifest"], 1, end=clip["end"] - 2, layout="crop")
+    assert again["layout"] == "crop" and again["end"] == pytest.approx(clip["end"] - 2)
+    assert Path(again["file"]).is_file() and any("crop layout" in line for line in again["log"])
+
+
+def test_rerender_reads_the_range_after_waiting(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
+    import threading
+    import time
+
+    from clipwright import mcp_server
+
+    m = _manifest(tmp_path / "run")
+    calls: list[tuple[float, float]] = []
+    monkeypatch.setattr(pipeline, "rerender_clip",
+                        lambda manifest, n, start, end, log=print, layout=None: calls.append((start, end)))
+    notes: list[str] = []
+    mcp_server._RUN_LOCK.acquire()
+    try:
+        t = threading.Thread(target=rerender_clip, args=(str(m), 1),
+                             kwargs={"layout": "crop", "report": lambda f, msg: notes.append(msg)})
+        t.start()
+        time.sleep(0.2)
+        # the run being waited for writes new clips into the same folder
+        data = json.loads(m.read_text(encoding="utf-8"))
+        data["clips"][0].update(start=30.0, end=50.0)
+        m.write_text(json.dumps(data), encoding="utf-8")
+    finally:
+        mcp_server._RUN_LOCK.release()
+    t.join()
+    assert notes == ["waiting for another clipwright call to finish"]
+    assert calls == [(30.0, 50.0)]
