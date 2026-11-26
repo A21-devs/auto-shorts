@@ -8,6 +8,7 @@ import sys
 from pathlib import Path
 
 from . import __version__, copywriting, download, speaker
+from .captions import STYLES
 from .pipeline import Job, run
 from .platforms import PLATFORMS, aspect_for, lengths
 from .probe import ToolMissing, require
@@ -32,6 +33,12 @@ def add_job_args(p: argparse.ArgumentParser) -> None:
                    help="output frame: 9:16 vertical (default), 1:1 square, 4:5 feed, 16:9 landscape. "
                         "--platform youtube/x pick 16:9 and linkedin 1:1 unless this is given")
     p.add_argument("--no-captions", action="store_true", help="skip transcription and captions")
+    p.add_argument("--caption-style", choices=list(STYLES), default="bold",
+                   help="bold (default, all caps with a yellow word), clean (mixed case, green), boxed (on a dark "
+                        "box, for busy gameplay), pop (huge, two words at a time), minimal (small, no highlight)")
+    p.add_argument("--hook", action="store_true",
+                   help="show a title at the top for the first 3 seconds: the --copy title if there is one, "
+                        "otherwise the clip's first sentence")
     p.add_argument("--jumpcut", action="store_true",
                    help="cut out pauses longer than 0.5s inside each clip (captions are retimed to match)")
     p.add_argument("--pick", choices=copywriting.BACKENDS,
@@ -90,7 +97,8 @@ def job_from_args(args: argparse.Namespace, video: Path, out_dir: Path | None, s
         source=video,
         out_dir=out_dir,
         clips=Options(count=args.count, min_len=args.min_len, max_len=args.max_len),
-        render=RenderOptions(layout=args.layout, encoder=args.encoder, jumpcut=args.jumpcut, aspect=args.aspect),
+        render=RenderOptions(layout=args.layout, encoder=args.encoder, jumpcut=args.jumpcut, aspect=args.aspect,
+                             caption_style=args.caption_style, hook=args.hook),
         captions=not args.no_captions,
         whisper_model=args.model,
         language=args.language,

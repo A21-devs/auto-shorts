@@ -109,7 +109,13 @@
         <option>large-v3</option>
       </select>
     </label>
+    <label>Caption style
+      <select name="caption_style">
+        <option value="bold">bold</option><option value="clean">clean</option><option value="boxed">boxed</option><option value="pop">pop</option><option value="minimal">minimal</option>
+      </select>
+    </label>
     <label class="check"><input type="checkbox" name="captions" checked> Captions</label>
+    <label class="check"><input type="checkbox" name="hook"> Hook title</label>
     <label class="check"><input type="checkbox" name="jumpcut"> Cut pauses</label>
     <button class="primary" type="submit">Make shorts</button>
     <!-- separate from #error so the next status poll doesn't wipe it -->
@@ -403,6 +409,8 @@ $("new-job").addEventListener("submit", async (ev) => {
     aspect: f.get("aspect") || null,
     captions: f.get("captions") === "on",
     jumpcut: f.get("jumpcut") === "on",
+    caption_style: f.get("caption_style"),
+    hook: f.get("hook") === "on",
   };
   const button = ev.target.querySelector("button");
   button.disabled = true;
