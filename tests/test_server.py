@@ -486,3 +486,69 @@ def test_link_job_refuses_a_folder_that_is_busy(tmp_path: Path, monkeypatch: pyt
     app.jobs[st.id] = st
     app.execute(st)
     assert st.state == "error" and "still writing" in (st.error or "")
+
+
+def test_a_slow_download_does_not_hold_up_a_local_file(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
+    import threading
+    import time
+
+    from clipwright import download
+
+    fake_link_download(tmp_path, monkeypatch)
+    gate = threading.Event()
+    real = download.download
+
+    def slow(url: str, folder: Path, log: Any, on_progress: Any, subtitles: str | None) -> Path:
+        assert gate.wait(5)
+        return real(url, folder, log, on_progress, subtitles)
+
+    monkeypatch.setattr(download, "download", slow)
+    app = App(downloads=tmp_path / "dl")
+    link = app.submit(parse_job({"video": "https://x.test/v"}))
+    second_link = app.submit(parse_job({"video": "https://x.test/w", "out": str(tmp_path / "w_out")}))
+    video = tmp_path / "local.mp4"
+    video.write_bytes(b"x")
+    local = app.submit(parse_job({"video": str(video)}))
+
+    deadline = time.time() + 5
+    while local.state != "done" and time.time() < deadline:
+        time.sleep(0.02)
+    assert local.state == "done", local.error
+    assert link.state == "downloading" and link.stage == "download"
+    # one download at a time: the second link hasn't started yet
+    assert second_link.state == "downloading" and second_link.stage == ""
+    gate.set()
+    deadline = time.time() + 5
+    while (link.state, second_link.state) != ("done", "done") and time.time() < deadline:
+        time.sleep(0.02)
+    assert (link.state, second_link.state) == ("done", "done"), (link.error, second_link.error)
+
+
+def test_failed_download_ends_in_error_and_frees_the_folder(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
+    import time
+
+    from clipwright import download
+
+    fake_link_download(tmp_path, monkeypatch)
+
+    import threading
+    gate = threading.Event()
+
+    def broken(url: str, folder: Path, log: Any, on_progress: Any, subtitles: str | None) -> Path:
+        assert gate.wait(5)
+        raise download.DownloadError("Video unavailable")
+
+    monkeypatch.setattr(download, "download", broken)
+    app = App(downloads=tmp_path / "dl")
+    out = tmp_path / "mine"
+    st = app.submit(parse_job({"video": "https://x.test/v", "out": str(out)}))
+    with pytest.raises(server.FolderBusy):  # a downloading job already owns its --out folder
+        app.submit(parse_job({"video": "https://x.test/w", "out": str(out)}))
+    gate.set()
+    deadline = time.time() + 5
+    while st.state == "downloading" and time.time() < deadline:
+        time.sleep(0.02)
+    assert st.state == "error" and st.error == "Video unavailable"
+    video = tmp_path / "local.mp4"
+    video.write_bytes(b"x")
+    app.submit(parse_job({"video": str(video), "out": str(out)}))  # no longer busy
