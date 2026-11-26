@@ -100,7 +100,7 @@ class RunProgress:
 
 
 def make_clips(video: str, count: int = 6, platform: str | None = None, layout: str = "blur",
-               captions: bool = True, jumpcut: bool = False, model: str = "small",
+               captions: bool = True, jumpcut: bool = False, model: str = "small", aspect: str | None = None,
                out: str | None = None, downloads: str | None = None,
                report: Report | None = None) -> dict[str, Any]:
     """Cuts a video into vertical shorts and returns where they are plus each clip's range,
@@ -111,6 +111,8 @@ def make_clips(video: str, count: int = 6, platform: str | None = None, layout: 
                             "jumpcut": jumpcut, "model": model}
     if platform is not None:
         body["platform"] = platform
+    if aspect is not None:
+        body["aspect"] = aspect
     if out is not None:
         body["out"] = out
     try:
@@ -271,10 +273,11 @@ def _make_clips_tool() -> Callable[..., dict[str, Any]]:
 
     def tool(video: str, count: int = 6, platform: str | None = None, layout: str = "blur",
              captions: bool = True, jumpcut: bool = False, model: str = "small",
-             out: str | None = None, downloads: str | None = None,
+             out: str | None = None, downloads: str | None = None, aspect: str | None = None,
              ctx: Context | None = None) -> dict[str, Any]:
         return make_clips(video, count=count, platform=platform, layout=layout, captions=captions,
-                          jumpcut=jumpcut, model=model, out=out, downloads=downloads, report=_reporter(ctx))
+                          jumpcut=jumpcut, model=model, out=out, downloads=downloads, aspect=aspect,
+                          report=_reporter(ctx))
 
     tool.__annotations__["ctx"] = Context | None
     return tool

@@ -37,8 +37,8 @@ from urllib.parse import unquote
 
 from . import download
 from .pipeline import Job, check_layout, mark_clip, rerender_clip, run
-from .platforms import lengths
-from .render import RenderOptions
+from .platforms import aspect_for, lengths
+from .render import ASPECTS, RenderOptions
 from .segment import Options
 from .subtitles import sidecar
 
@@ -140,6 +140,10 @@ def parse_job(body: dict[str, Any]) -> Job:
         layout = check_layout(layout)
     except ValueError as e:
         raise BadRequest(str(e)) from None
+    aspect = body.get("aspect")
+    if aspect is not None and aspect not in ASPECTS:
+        raise BadRequest(f"aspect must be one of {', '.join(ASPECTS)}")
+    aspect = aspect_for(platform, aspect)
     captions = body.get("captions", True)
     if not isinstance(captions, bool):
         raise BadRequest("captions must be true or false")
@@ -159,7 +163,7 @@ def parse_job(body: dict[str, Any]) -> Job:
         source=src,
         out_dir=out_dir,
         clips=Options(count=int(count), min_len=min_len, max_len=max_len),
-        render=RenderOptions(layout=layout, jumpcut=jump),
+        render=RenderOptions(layout=layout, jumpcut=jump, aspect=aspect),
         captions=captions,
         whisper_model=model,
         srt=sidecar(src) if captions and url is None else None,

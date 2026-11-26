@@ -9,9 +9,9 @@ from pathlib import Path
 
 from . import __version__, copywriting, download, speaker
 from .pipeline import Job, run
-from .platforms import PLATFORMS, lengths
+from .platforms import PLATFORMS, aspect_for, lengths
 from .probe import ToolMissing, require
-from .render import LAYOUTS, RenderOptions
+from .render import ASPECTS, LAYOUTS, RenderOptions
 from .segment import Options
 from .subtitles import sidecar
 
@@ -28,6 +28,9 @@ def add_job_args(p: argparse.ArgumentParser) -> None:
                    help="blur = video on a blurred background, crop = fill the frame, "
                         "follow = fill the frame and pan toward the action, speaker = fill the frame and cut to "
                         "whoever is talking (podcasts, interviews; needs clipwright[speaker]), fit = black bars")
+    p.add_argument("--aspect", choices=list(ASPECTS),
+                   help="output frame: 9:16 vertical (default), 1:1 square, 4:5 feed, 16:9 landscape. "
+                        "--platform youtube/x pick 16:9 and linkedin 1:1 unless this is given")
     p.add_argument("--no-captions", action="store_true", help="skip transcription and captions")
     p.add_argument("--jumpcut", action="store_true",
                    help="cut out pauses longer than 0.5s inside each clip (captions are retimed to match)")
@@ -42,7 +45,7 @@ def add_job_args(p: argparse.ArgumentParser) -> None:
 
 
 def build_parser() -> argparse.ArgumentParser:
-    p = argparse.ArgumentParser(prog="clipwright", description="Cut a long video into vertical shorts.")
+    p = argparse.ArgumentParser(prog="clipwright", description="Cut a long video into short clips.")
     p.add_argument("video", help="input video file, or a link (YouTube, Twitch, ...) with clipwright[link] installed")
     p.add_argument("--downloads", type=Path, default=Path("."),
                    help="where links are downloaded to (default: the current folder)")
@@ -70,6 +73,7 @@ def check_job_args(args: argparse.Namespace) -> str | None:
         return str(e)
     if args.min_len <= 0 or args.max_len < args.min_len:
         return "--min must be > 0 and --max must be >= --min"
+    args.aspect = aspect_for(args.platform, args.aspect)
     return None
 
 
@@ -79,7 +83,7 @@ def job_from_args(args: argparse.Namespace, video: Path, out_dir: Path | None, s
         source=video,
         out_dir=out_dir,
         clips=Options(count=args.count, min_len=args.min_len, max_len=args.max_len),
-        render=RenderOptions(layout=args.layout, encoder=args.encoder, jumpcut=args.jumpcut),
+        render=RenderOptions(layout=args.layout, encoder=args.encoder, jumpcut=args.jumpcut, aspect=args.aspect),
         captions=not args.no_captions,
         whisper_model=args.model,
         language=args.language,

@@ -7,7 +7,7 @@ word currently being spoken is highlighted.
 from __future__ import annotations
 
 from collections.abc import Sequence
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 
 from .transcribe import Word
 
@@ -22,6 +22,19 @@ class CaptionStyle:
     max_words: int = 3
     max_chars: int = 18
     margin_v: int = 520         # distance from the bottom on a 1920-tall frame
+
+    def for_frame(self, width: int, height: int) -> CaptionStyle:
+        """The same look on another frame size. Sizes are tuned for 1080x1920; a shorter frame gets
+        smaller text (not below 65%, or it stops reading on a phone) and a proportional margin."""
+        if (width, height) == (1080, 1920):
+            return self
+        scale = height / 1920
+        wide = width > height
+        text = max(scale, 0.65)
+        return replace(self, size=round(self.size * text), outline=max(2, round(self.outline * text)),
+                       margin_v=round(self.margin_v * scale * (0.5 if wide else 1)),
+                       max_chars=self.max_chars * 2 if wide else self.max_chars,
+                       max_words=self.max_words + 2 if wide else self.max_words)
 
 
 def _ass_color(rgb: str) -> str:
