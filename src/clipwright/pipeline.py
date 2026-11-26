@@ -15,7 +15,7 @@ from typing import Any, NamedTuple
 import numpy as np
 
 from . import aipick, audio, copywriting, jumpcut, platforms, scenes, segment, speaker, subtitles, thumbnail, transcribe
-from .captions import CaptionStyle, build_ass, build_srt
+from .captions import STYLES, build_ass, build_srt, hook_text
 from .probe import MediaInfo, probe
 from .render import LAYOUTS, Layout, RenderOptions, frame_size, render
 
@@ -145,21 +145,23 @@ class Rendered(NamedTuple):
 
 
 def _render_one(info: MediaInfo, words: list[transcribe.Word], start: float, end: float, out_dir: Path,
-                base: str, opts: RenderOptions, suffix: str = "", log: Log = print) -> Rendered:
-    """Writes <base><suffix>.ass (if there are words) and .srt (if any of them are in this clip),
-    renders <base><suffix>.mp4 and grabs <base><suffix>.jpg from it."""
+                base: str, opts: RenderOptions, suffix: str = "", log: Log = print,
+                hook: str | None = None) -> Rendered:
+    """Writes <base><suffix>.ass (if there are words or a hook title) and .srt (if any words are in
+    this clip), renders <base><suffix>.mp4 and grabs <base><suffix>.jpg from it."""
     name = f"{base}{suffix}.mp4"
     keep = plan_cuts(info, start, end) if opts.jumpcut else None
     length = jumpcut.kept_duration(keep) if keep else end - start
     sub = srt = None
-    if words:
+    if words or hook:
         sub = f"{base}{suffix}.ass"
         if keep:
             timed, t0, t1 = jumpcut.retime_words(words, start, keep), 0.0, length
         else:
             timed, t0, t1 = words, start, end
         w, h = frame_size(opts.aspect)
-        ass = build_ass(timed, t0, t1, CaptionStyle().for_frame(w, h), width=w, height=h)
+        style = STYLES.get(opts.caption_style, STYLES["bold"]).for_frame(w, h)
+        ass = build_ass(timed, t0, t1, style, width=w, height=h, hook=hook)
         (out_dir / sub).write_text(ass, encoding="utf-8")
         srt_text = build_srt(timed, t0, t1)
         if srt_text:  # a 0-byte .srt gets rejected on upload, no file is better
@@ -231,7 +233,17 @@ def run(job: Job, log: Log = print, progress: Progress = _no_progress) -> Path:
         why = ", ".join(clip.reasons)
         log(f"[{i}/{len(clips)}] {clip.start:7.1f}s - {clip.end:7.1f}s  score {clip.score:5.2f}  {why}")
         t = time.perf_counter()
-        r = _render_one(info, words, clip.start, clip.end, out_dir, f"{stem}_clip{i:02d}", job.render, log=log)
+        post: dict[str, Any] | None = None
+        if copy:  # before the render, so a --hook can use the AI title
+            post, ok = _post_copy(job, words, clip.start, clip.end, log)
+            if not ok:
+                copy = None
+                log("         skipping titles for the rest of the clips")
+        hook = None
+        if job.render.hook:
+            hook = str(post["title"]) if post else hook_text(words, clip.start, clip.end)
+        r = _render_one(info, words, clip.start, clip.end, out_dir, f"{stem}_clip{i:02d}", job.render, log=log,
+                        hook=hook)
         name = r.file
         # round once, so the log and the review page (which reads the manifest) show the same number
         length = round(r.length, 2)
@@ -245,12 +257,9 @@ def run(job: Job, log: Log = print, progress: Progress = _no_progress) -> Path:
         entry = {**asdict(clip), "file": name, "subtitles": r.subtitles, "srt": r.srt,
                  "thumbnail": r.thumbnail, "length": length}
         if job.copy:
-            entry["copy"] = None
-            if copy:
-                entry["copy"], ok = _post_copy(job, words, clip.start, clip.end, log)
-                if not ok:
-                    copy = None
-                    log("         skipping titles for the rest of the clips")
+            entry["copy"] = post
+        if hook:
+            entry["hook"] = hook
         results.append(entry)
         progress("render", i / len(clips))
 
@@ -322,7 +331,8 @@ def rerender_clip(manifest: Path, n: int, start: float, end: float, log: Log = p
     info = probe(source)
     log(f"re-rendering {entry['file']}: {start:.1f}s - {end:.1f}s, {opts.layout} layout")
     try:
-        r = _render_one(info, words, start, end, out_dir, base, opts, suffix=".tmp", log=log)
+        r = _render_one(info, words, start, end, out_dir, base, opts, suffix=".tmp", log=log,
+                        hook=entry.get("hook") if opts.hook else None)
     except BaseException:
         for leftover in (f"{base}.tmp.mp4", f"{base}.tmp.ass", f"{base}.tmp.srt", f"{base}.tmp.jpg"):
             (out_dir / leftover).unlink(missing_ok=True)

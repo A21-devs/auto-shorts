@@ -45,6 +45,8 @@ class RenderOptions:
     normalize_audio: bool = True
     jumpcut: bool = False           # cut out pauses inside the clip (needs audio)
     aspect: str = "9:16"            # a key of ASPECTS
+    caption_style: str = "bold"     # a key of captions.STYLES
+    hook: bool = False              # title at the top for the first seconds
 
 
 @functools.cache

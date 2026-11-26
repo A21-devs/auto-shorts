@@ -56,6 +56,15 @@ Layouts (`--layout`):
 - `speaker`: fills the frame and cuts to whoever is talking, for podcasts and interviews. Finds faces with OpenCV and watches whose mouth moves, so it needs `pip install "clipwright[speaker]"`
 - `fit`: black bars
 
+Caption styles (`--caption-style`):
+- `bold` (default): all caps, white with the current word in yellow
+- `clean`: mixed case, green highlight, the podcast-clip look
+- `boxed`: on a dark box, for busy gameplay where an outline gets lost
+- `pop`: huge, two words at a time, pink highlight
+- `minimal`: small and low, no highlight
+
+`--hook` puts a title at the top for the first 3 seconds, the part that decides whether someone keeps watching. It's the `--copy` title when there is one, otherwise the clip's first sentence. Re-rendering a clip on the review page keeps it.
+
 `--jumpcut` cuts pauses longer than half a second out of each clip, keeping 0.1s on each side so words aren't clipped. Captions are retimed to match. A pause is anything 25 dB under the clip's loud parts, so constant game audio is left alone.
 
 ## Links

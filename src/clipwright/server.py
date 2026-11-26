@@ -36,6 +36,7 @@ from typing import Any
 from urllib.parse import unquote
 
 from . import copywriting, download
+from .captions import STYLES
 from .pipeline import Job, check_layout, mark_clip, rerender_clip, run
 from .platforms import aspect_for, lengths
 from .render import ASPECTS, RenderOptions
@@ -150,6 +151,12 @@ def parse_job(body: dict[str, Any]) -> Job:
     jump = body.get("jumpcut", False)
     if not isinstance(jump, bool):
         raise BadRequest("jumpcut must be true or false")
+    caption_style = body.get("caption_style", "bold")
+    if caption_style not in STYLES:
+        raise BadRequest(f"caption_style must be one of {', '.join(STYLES)}")
+    hook = body.get("hook", False)
+    if not isinstance(hook, bool):
+        raise BadRequest("hook must be true or false")
     pick = body.get("pick")
     if pick is not None and pick not in copywriting.BACKENDS:
         raise BadRequest(f"pick must be one of {', '.join(copywriting.BACKENDS)}")
@@ -168,7 +175,7 @@ def parse_job(body: dict[str, Any]) -> Job:
         source=src,
         out_dir=out_dir,
         clips=Options(count=int(count), min_len=min_len, max_len=max_len),
-        render=RenderOptions(layout=layout, jumpcut=jump, aspect=aspect),
+        render=RenderOptions(layout=layout, jumpcut=jump, aspect=aspect, caption_style=caption_style, hook=hook),
         captions=captions,
         whisper_model=model,
         srt=sidecar(src) if captions and url is None else None,

@@ -101,7 +101,7 @@ class RunProgress:
 
 def make_clips(video: str, count: int = 6, platform: str | None = None, layout: str = "blur",
                captions: bool = True, jumpcut: bool = False, model: str = "small", aspect: str | None = None,
-               pick: str | None = None,
+               pick: str | None = None, caption_style: str = "bold", hook: bool = False,
                out: str | None = None, downloads: str | None = None,
                report: Report | None = None) -> dict[str, Any]:
     """Cuts a video into vertical shorts and returns where they are plus each clip's range,
@@ -116,6 +116,7 @@ def make_clips(video: str, count: int = 6, platform: str | None = None, layout: 
         body["aspect"] = aspect
     if pick is not None:
         body["pick"] = pick
+    body["caption_style"], body["hook"] = caption_style, hook
     if out is not None:
         body["out"] = out
     try:
@@ -277,9 +278,11 @@ def _make_clips_tool() -> Callable[..., dict[str, Any]]:
     def tool(video: str, count: int = 6, platform: str | None = None, layout: str = "blur",
              captions: bool = True, jumpcut: bool = False, model: str = "small",
              out: str | None = None, downloads: str | None = None, aspect: str | None = None,
-             pick: str | None = None, ctx: Context | None = None) -> dict[str, Any]:
+             pick: str | None = None, caption_style: str = "bold", hook: bool = False,
+             ctx: Context | None = None) -> dict[str, Any]:
         return make_clips(video, count=count, platform=platform, layout=layout, captions=captions,
                           jumpcut=jumpcut, model=model, out=out, downloads=downloads, aspect=aspect, pick=pick,
+                          caption_style=caption_style, hook=hook,
                           report=_reporter(ctx))
 
     tool.__annotations__["ctx"] = Context | None
