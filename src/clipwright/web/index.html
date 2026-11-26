@@ -174,13 +174,15 @@ function renderStatus(job) {
   $("status").hidden = false;
   const label = job.state === "queued" ? "waiting for the job before it"
     : job.state === "error" ? "failed"
+    : job.state === "downloading" && !job.stage ? "waiting for the download before it"
     : LABELS[job.stage] || job.stage || "starting";
   // the download's percent goes in the label only: how long it takes says nothing about the rest
   // of the job, and on the bar it would fill to 100% and then drop back to 0 when analysis starts
   const downloading = job.stage === "download";
   const pct = downloading ? 0 : Math.round(overall(job.stage, job.fraction, job.stages) * 100);
   const shown = downloading ? Math.round(job.fraction * 100) : pct;
-  $("status-line").textContent = `${job.video} - ${label}${job.state === "running" ? ` (${shown}%)` : ""}`;
+  const active = job.state === "running" || job.state === "downloading";
+  $("status-line").textContent = `${job.video} - ${label}${active && job.stage ? ` (${shown}%)` : ""}`;
   $("bar").style.width = `${job.state === "done" ? 100 : pct}%`;
   $("error").textContent = job.error || "";
   $("log").textContent = job.log.join("\n");
@@ -349,7 +351,7 @@ async function poll() {
     renderStatus(job);
     renderNotice(job);
     renderClips(job);
-    if (job.state === "queued" || job.state === "running") pollTimer = setTimeout(poll, 1000);
+    if (["downloading", "queued", "running"].includes(job.state)) pollTimer = setTimeout(poll, 1000);
     else $("new-job").querySelector("button").disabled = false;
   } catch (e) {
     if (e.message === "no such job") {

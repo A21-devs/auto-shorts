@@ -65,7 +65,7 @@ class JobState:
     out_dir: Path | None  # None until a link is downloaded and the default folder is known
     job: Job
     created: float = field(default_factory=time.time)
-    state: str = "queued"  # queued | running | done | error
+    state: str = "queued"  # downloading | queued | running | done | error
     stage: str = ""
     fraction: float = 0.0
     error: str | None = None
@@ -168,9 +168,17 @@ def parse_job(body: dict[str, Any]) -> Job:
     )
 
 
+# states of a job that will still write to its folder
+ACTIVE = ("downloading", "queued", "running")
+
+
 class App:
     """Job registry plus one worker thread. Jobs run one at a time: two whisper models and two
-    ffmpeg encodes fighting over the same GPU is slower than doing them in order."""
+    ffmpeg encodes fighting over the same GPU is slower than doing them in order.
+
+    Links are downloaded on a separate thread first (one at a time, so two downloads don't split
+    the bandwidth and the order of pasted links is kept) and join the worker's queue when the file
+    is there. A long VOD download doesn't hold up local files pasted after it."""
 
     def __init__(self, downloads: Path | None = None) -> None:
         # where pasted links are downloaded to
@@ -178,8 +186,11 @@ class App:
         self.jobs: dict[str, JobState] = {}
         self._lock = threading.Lock()  # submit() runs on request threads
         self._queue: queue.Queue[JobState] = queue.Queue()
+        self._downloads: queue.Queue[JobState] = queue.Queue()
         self._worker = threading.Thread(target=self._work, name="clipwright-worker", daemon=True)
         self._worker.start()
+        self._downloader = threading.Thread(target=self._download_links, name="clipwright-download", daemon=True)
+        self._downloader.start()
 
     def submit(self, job: Job) -> JobState:
         """Queues a job. Raises FolderBusy if a queued or running job already writes to the same folder.
@@ -189,8 +200,10 @@ class App:
             # a link's folder is only known after the download, execute() checks it then
             if job.out_dir is not None:
                 self._claim(st, job.out_dir)
+            if job.url is not None and not job.source.is_file():
+                st.state = "downloading"
             self.jobs[st.id] = st
-        self._queue.put(st)
+        (self._downloads if st.state == "downloading" else self._queue).put(st)
         return st
 
     def _claim(self, st: JobState, out_dir: Path) -> None:
@@ -199,7 +212,7 @@ class App:
         folder = out_dir.resolve()
         same = [s for s in self.jobs.values() if s is not st and s.out_dir and s.out_dir.resolve() == folder]
         # a finished job holding its lock is in the middle of re-rendering a clip into this folder
-        busy = next((s for s in same if s.state in ("queued", "running") or s.lock.locked()), None)
+        busy = next((s for s in same if s.state in ACTIVE or s.lock.locked()), None)
         if busy:
             raise FolderBusy(f"job {busy.id} is still writing to {folder}")
         for old in same:
@@ -207,15 +220,15 @@ class App:
         st.out_dir = out_dir
 
     def _fetch(self, st: JobState) -> None:
-        """Downloads a link job's video and fills in its source, subtitles and output folder."""
+        """Downloads a link job's video and fills in its source, subtitles and output folder.
+        The folder is claimed later by execute(), on the worker: a job that runs into the same
+        folder may still be running now, and this one should wait its turn, not fail."""
         job = st.job
         assert job.url is not None
         lang = (job.language or "en") if job.captions else None
         path = download.download(job.url, self.downloads, log=st.add_log,
                                  on_progress=lambda f: st.set_progress("download", f), subtitles=lang)
         out_dir = job.out_dir or path.with_name(f"{path.stem}_shorts")
-        with self._lock:
-            self._claim(st, out_dir)
         st.video = str(path)
         st.job = replace(job, source=path, out_dir=out_dir, srt=sidecar(path) if job.captions else None)
 
@@ -239,19 +252,46 @@ class App:
         while True:
             self.execute(self._queue.get())
 
+    def _download_links(self) -> None:
+        while True:
+            st = self._downloads.get()
+            if self.fetch(st):
+                st.state = "queued"
+                self._queue.put(st)
+
+    def fetch(self, st: JobState) -> bool:
+        """Downloads a link job. False (and the job in the error state) if that failed."""
+        st.set_progress("download", 0.0)  # until this, a "downloading" job is waiting for its turn
+        try:
+            self._fetch(st)
+        except Exception as e:  # a bad link or a full disk shows on the page like a pipeline error
+            self._fail(st, e)
+            return False
+        return True
+
+    def _fail(self, st: JobState, e: Exception) -> None:
+        st.error = str(e) or type(e).__name__
+        st.add_log("".join(traceback.format_exception_only(e)).strip())
+        st.state = "error"
+
     def execute(self, st: JobState) -> None:
+        if st.job.url is not None and not st.job.source.is_file():
+            # submit() sends links to the download thread first; this is for jobs run directly
+            st.state = "downloading"
+            if not self.fetch(st):
+                return
         st.state = "running"
         try:
-            if st.job.url is not None and not st.job.source.is_file():
-                self._fetch(st)
+            if st.out_dir is None:  # a link's folder, known since the download
+                assert st.job.out_dir is not None
+                with self._lock:
+                    self._claim(st, st.job.out_dir)
             with st.lock:
                 manifest = run(st.job, log=st.add_log, progress=st.set_progress)
                 st.manifest = json.loads(manifest.read_text(encoding="utf-8"))
             st.state = "done"
         except Exception as e:  # anything the pipeline throws ends up on the page, not in a dead thread
-            st.error = str(e) or type(e).__name__
-            st.add_log("".join(traceback.format_exception_only(e)).strip())
-            st.state = "error"
+            self._fail(st, e)
 
 
 class Handler(BaseHTTPRequestHandler):
