@@ -1,3 +1,3 @@
-"""Turn long videos into vertical short clips."""
+"""Turn long videos into short clips ready to post."""
 
-__version__ = "0.2.0"
+__version__ = "0.3.0"

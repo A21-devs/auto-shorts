@@ -1,0 +1,42 @@
+name: Release
+
+# Push a tag like v0.3.0 (matching pyproject.toml) to build the wheel and sdist and publish them
+# as a GitHub release, with that version's section of CHANGELOG.md as the notes.
+on:
+  push:
+    tags: ["v*"]
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v5
+        with:
+          python-version: "3.12"
+      - name: Tag matches pyproject.toml
+        run: |
+          want="v$(grep -m1 '^version' pyproject.toml | cut -d '"' -f2)"
+          if [ "$GITHUB_REF_NAME" != "$want" ]; then
+            echo "Tag is $GITHUB_REF_NAME but pyproject.toml says $want. Bump the version first."
+            exit 1
+          fi
+      - name: Install ffmpeg
+        run: sudo apt-get update && sudo apt-get install -y ffmpeg
+      - run: uv sync --locked --python 3.12
+      - run: uv run ruff check src tests
+      - run: uv run mypy
+      - run: uv run pytest -q
+      - run: uv build
+      - name: Notes from CHANGELOG.md
+        run: |
+          v="${GITHUB_REF_NAME#v}"
+          awk -v v="$v" '$0 == "## " v {on=1; next} /^## / {on=0} on' CHANGELOG.md > notes.md
+          test -s notes.md || { echo "No section for $v in CHANGELOG.md"; exit 1; }
+      - name: Publish
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: gh release create "$GITHUB_REF_NAME" dist/* --title "clipwright ${GITHUB_REF_NAME#v}" --notes-file notes.md

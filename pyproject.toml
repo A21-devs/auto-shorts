@@ -1,7 +1,7 @@
 [project]
 name = "clipwright"
-version = "0.2.0"
-description = "Turn long videos into vertical short clips with captions, automatically."
+version = "0.3.0"
+description = "Turn long videos into short captioned clips for Shorts, TikTok, Reels and more, on your own machine."
 readme = "README.md"
 license = "MIT"
 requires-python = ">=3.12"

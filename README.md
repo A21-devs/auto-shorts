@@ -1,8 +1,48 @@
 # clipwright
 
-Inspired by [AutoClip](https://github.com/zhouxiaoka/autoclip) by @zhouxiaoka. Same idea, written from scratch: a small Python tool you run from the terminal or a local web page.
+Turn a long video into short clips ready to post: the best moments, cut, reframed, captioned, with a cover and the post text. Runs on your own machine, no account, no API key needed.
 
-Give it a long video (a stream VOD, a gameplay recording, a podcast) and it finds the best moments and cuts them into vertical 9:16 shorts with word-by-word captions. It runs on your own machine and doesn't need an API key.
+[![CI](https://img.shields.io/github/actions/workflow/status/A21-devs/clipwright/ci.yml?branch=main&label=CI)](https://github.com/A21-devs/clipwright/actions/workflows/ci.yml)
+[![Release](https://img.shields.io/github/v/release/A21-devs/clipwright?label=release)](https://github.com/A21-devs/clipwright/releases/latest)
+[![Python 3.12+](https://img.shields.io/badge/python-3.12%2B-3776AB)](#install)
+[![License: MIT](https://img.shields.io/github/license/A21-devs/clipwright)](LICENSE)
+[![Stars](https://img.shields.io/github/stars/A21-devs/clipwright?style=flat)](https://github.com/A21-devs/clipwright/stargazers)
+
+Inspired by [AutoClip](https://github.com/zhouxiaoka/autoclip) by @zhouxiaoka. Same idea, written from scratch: a small Python tool you run from the terminal, a local web page, a folder watcher, or an AI agent.
+
+```bash
+pip install "clipwright[transcribe,link] @ git+https://github.com/A21-devs/clipwright"
+clipwright "my 2 hour stream.mp4" -n 8
+clipwright "https://www.youtube.com/watch?v=..." --platform tiktok --pick claude --copy claude --hook
+```
+
+**What you get for each clip:** a 9:16 (or square, 4:5, 16:9) MP4 with word-by-word burned-in captions, audio at -14 LUFS, a cover image, an `.srt` for upload, and optionally an AI-written title, description and hashtags in a text file ready to paste.
+
+## Features
+
+- **Finds the moments**: loudness, peaks, the first 3 seconds, talking speed and scene cuts, snapped to pauses and sentence ends. Optionally an AI reads the transcripts of the best candidates and helps choose (`--pick`).
+- **Any source**: a file, a folder of files, a YouTube / Twitch / Kick link, or an OBS recordings folder it watches.
+- **Reframes**: blurred background, center crop, a camera that follows the action (gameplay), or one that cuts to whoever is talking (podcasts).
+- **Captions**: word-by-word with the current word highlighted, five styles, a hook title for the first 3 seconds, and pauses cut out with captions retimed (`--jumpcut`).
+- **Platforms**: Shorts, TikTok, Reels, YouTube, X and LinkedIn presets with the right lengths and frame.
+- **Post text**: title, description and hashtags from Claude Code, Ollama, LM Studio or any OpenAI-compatible API.
+- **Review page**: watch every clip, trim it, change its layout, keep or drop it.
+- **For agents**: an MCP server, an agent skill, and `--json` output.
+- **Private**: video never leaves your machine. The optional AI features send transcript text only.
+
+### clipwright and AutoClip
+
+AutoClip is the bigger project, and if you want a desktop app it's the one to use. clipwright is the terminal-first take on the same idea.
+
+| | clipwright | AutoClip |
+| --- | --- | --- |
+| How you run it | CLI, local web page, folder watcher, MCP, Docker | Desktop app (Windows, macOS), web UI in Docker, CLI, MCP |
+| Picks moments with | audio + scene signals, optionally blended with an AI rating of the transcript | an AI model reading the transcript, vision models for gameplay |
+| AI providers | Claude Code (no key), Ollama, LM Studio / any OpenAI-compatible API | many cloud providers, Ollama, LM Studio |
+| Reframing | blur, crop, follow the action, cut to the speaker | speaker tracking, smart reframing |
+| Captions | 5 styles, hook title, jump cuts | captions, covers with titles, 13 UI languages |
+| Publishing | writes the post text, you upload | can publish directly to some platforms |
+| Size | one Python package, numpy + ffmpeg (extras optional) | desktop app with bundled Python and FFmpeg |
 
 ```bash
 clipwright "my 2 hour stream.mp4" -n 8
@@ -130,8 +170,6 @@ clipwright serve
 
 Open http://127.0.0.1:8765/, paste the path of a video (or a link, with `clipwright[link]` installed) and hit Make shorts. Links are downloaded to `Videos/clipwright` unless you start it with `--downloads DIR`. It shows progress while it works, then every clip with its score and why it was picked. The server only listens on your own machine.
 
-Before 0.2 this was called **clipwright**. The `clipwright` command still works, and analysis cached by the old name is picked up.
-
 Before 0.2 this was called **auto-shorts**. The `autoshorts` command still works, and analysis cached under the old name is picked up.
 
 ## Use it from an AI agent (MCP)
@@ -141,7 +179,16 @@ pip install "clipwright[mcp]"
 claude mcp add clipwright -- clipwright mcp
 ```
 
-`clipwright mcp` is an MCP server over stdio, so Claude Code, Claude Desktop and other MCP clients can run it. Tools: `make_clips(video, count, platform, layout, captions, jumpcut, model, out)` runs a job on a local file and returns the clips, and `list_clips(manifest)` reads a finished run. Same limits as the review page. Links aren't supported over MCP yet.
+`clipwright mcp` is an MCP server over stdio, so Claude Code, Claude Desktop and other MCP clients can run it. Tools:
+- `make_clips(video, count, platform, layout, captions, jumpcut, model, out, downloads, aspect, pick, caption_style, hook)` runs a job on a local file or a link and returns the clips, with progress notifications while it works
+- `list_clips(manifest)` reads a finished run
+- `rerender_clip(manifest, n, start, end, layout)` redoes one clip with a new range or layout
+
+Same limits as the review page.
+
+### Agent skill
+
+[`skills/clipwright/SKILL.md`](skills/clipwright/SKILL.md) teaches a coding agent (Claude Code and others that read skills) when and how to run clipwright from the shell: which options fit which kind of video, and how to read the manifest. Copy the folder into `~/.claude/skills/` (or your project's `.claude/skills/`).
 
 ## Install
 
@@ -153,7 +200,18 @@ pip install "clipwright[transcribe] @ git+https://github.com/A21-devs/clipwright
 pip install "clipwright[gpu] @ git+https://github.com/A21-devs/clipwright"
 ```
 
-Without the `transcribe` extra it still works. It just picks clips from audio + scenes and skips captions.
+Or download the wheel from the [latest release](https://github.com/A21-devs/clipwright/releases/latest) and `pip install "clipwright-<version>-py3-none-any.whl[transcribe]"`.
+
+Extras, add them in the brackets as needed: `transcribe` (Whisper captions), `gpu` (Whisper on an NVIDIA GPU), `link` (YouTube/Twitch links), `speaker` (the speaker layout), `mcp` (the MCP server). Without `transcribe` it still works; it picks clips from audio + scenes and skips captions.
+
+### Docker
+
+```bash
+docker build -t clipwright https://github.com/A21-devs/clipwright.git
+docker run --rm -v "$PWD:/work" clipwright "/work/my stream.mp4" -n 6 --platform shorts
+```
+
+The image has ffmpeg and every extra except `gpu`. Clips land next to the video in the mounted folder. Whisper models are downloaded on first use; mount a cache folder at `/root/.cache` to keep them between runs.
 
 ## Development
 

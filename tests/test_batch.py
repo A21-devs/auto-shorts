@@ -93,3 +93,23 @@ def test_json_and_post_file_on_a_real_run(tmp_path: Path, monkeypatch: pytest.Mo
     folder = tmp_path / "long_shorts"
     assert (folder / "long_clip01.txt").read_text(encoding="utf-8").startswith("A title\n\nA description.")
     assert "rendered long_clip01.mp4" in out.err
+
+
+def test_json_keeps_the_download_log_off_stdout(tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+                                                capsys: pytest.CaptureFixture[str]):
+    from clipwright import download
+
+    video = tmp_path / "dl.mp4"
+    video.write_bytes(b"x")
+
+    def fake_download(url: str, folder: Path, log: Any = print, **_k: Any) -> Path:
+        log("downloading 50%")
+        return video
+
+    monkeypatch.setattr(download, "available", lambda: True)
+    monkeypatch.setattr(download, "download", fake_download)
+    monkeypatch.setattr(cli, "run", fake_run([]))
+    assert cli.main(["https://www.youtube.com/watch?v=x", "--no-captions", "--json", "-o", str(tmp_path / "o")]) == 0
+    out = capsys.readouterr()
+    json.loads(out.out)
+    assert "downloading 50%" in out.err
