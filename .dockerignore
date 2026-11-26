@@ -1,0 +1,12 @@
+.git
+.github
+.venv
+.mypy_cache
+.pytest_cache
+.ruff_cache
+**/__pycache__
+tests
+dist
+*.mp4
+*.mkv
+*_shorts
