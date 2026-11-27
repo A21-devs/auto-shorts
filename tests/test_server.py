@@ -1,5 +1,6 @@
 import http.client
 import json
+import shutil
 import socket
 import threading
 import time
@@ -288,6 +289,36 @@ def test_review_page(srv):
     assert b"/api/jobs" in body
     assert request(srv, "GET", "/index.html")[0] == 200
     assert request(srv, "GET", "/", headers={"Host": "evil.example"})[0] == 403
+
+
+def test_review_page_cards_take_the_run_frame(srv):
+    import re
+    body = request(srv, "GET", "/")[2].decode("utf-8")
+    # no fixed 9:16 on the video: the run's frame comes in through --clip-aspect, 9:16 as the fallback,
+    # and object-fit: contain keeps the whole clip visible while the card changes shape
+    video_rule = re.search(r"\.clip video \{([^}]*)\}", body)
+    assert video_rule is not None
+    assert "aspect-ratio: var(--clip-aspect, 9 / 16)" in video_rule.group(1)
+    assert "object-fit: contain" in video_rule.group(1)
+    assert 'setProperty("--clip-aspect"' in body
+
+
+@pytest.mark.skipif(not shutil.which("node"), reason="needs node")
+def test_review_page_reads_the_aspect_from_the_manifest(srv):
+    import re
+    import subprocess
+
+    from clipwright.render import ASPECTS
+    body = request(srv, "GET", "/")[2].decode("utf-8")
+    fn = re.search(r"^function clipAspect\(manifest\) \{.*?^\}", body, re.S | re.M)
+    assert fn is not None
+    manifests = [{"render": {"aspect": a}} for a in ASPECTS]
+    # from before --aspect (#98), no render options at all, and nonsense
+    manifests += [{"render": {"layout": "blur"}}, {}, {"render": {"aspect": "0:0"}}, {"render": {"aspect": "x"}}]
+    script = f"{fn.group(0)}\nconsole.log(JSON.stringify({json.dumps(manifests)}.map(clipAspect)));"
+    out = subprocess.run(["node", "-e", script], capture_output=True, text=True, check=True).stdout
+    expected = [[int(n) for n in a.split(":")] for a in ASPECTS] + [[9, 16]] * 4
+    assert json.loads(out) == expected
 
 
 # --- clip edits ---
