@@ -47,6 +47,7 @@ PAGE = Path(__file__).with_name("web") / "index.html"
 MAX_BODY = 64 * 1024
 # an error sent before the body was read still reads (and drops) up to this much of it first, see _discard_body
 DRAIN_MAX = 1024 * 1024
+DRAIN_SECONDS = 2.0  # and gives up after this long, a client that never sends its body gets the error anyway
 LOG_LINES = 200
 CHUNK = 256 * 1024
 KEEP_WAIT = 2.0  # seconds a keep/drop waits for another edit of the same job to finish
@@ -352,11 +353,24 @@ class Handler(BaseHTTPRequestHandler):
             return
         if not 0 < left <= DRAIN_MAX:
             return
-        while left > 0:
-            chunk = self.rfile.read(min(left, CHUNK))
-            if not chunk:
-                break
-            left -= len(chunk)
+        # the socket has no timeout of its own, without one a client that declares a body and never
+        # sends it would hold this thread forever (an error used to go out without waiting for it)
+        deadline = time.monotonic() + DRAIN_SECONDS
+        before = self.connection.gettimeout()
+        try:
+            while left > 0:
+                remaining = deadline - time.monotonic()
+                if remaining <= 0:
+                    break
+                self.connection.settimeout(remaining)
+                chunk = self.rfile.read1(min(left, CHUNK))
+                if not chunk:
+                    break
+                left -= len(chunk)
+        except OSError:  # timed out or reset: send the error and let the connection close
+            pass
+        finally:
+            self.connection.settimeout(before)
 
     def _host_ok(self) -> bool:
         host = (self.headers.get("Host") or "").rsplit(":", 1)[0].strip("[]").lower()

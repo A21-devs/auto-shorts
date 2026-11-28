@@ -232,6 +232,17 @@ def test_errors_arrive_even_with_an_unread_body(srv, path: str, ctype: str, stat
         assert got == status
 
 
+def test_error_doesnt_wait_forever_for_a_body_that_never_comes(srv, monkeypatch: pytest.MonkeyPatch):
+    monkeypatch.setattr(server, "DRAIN_SECONDS", 0.3)
+    with socket.create_connection(srv, timeout=5) as c:
+        c.sendall(b"POST /api/jobs HTTP/1.1\r\nHost: 127.0.0.1\r\nContent-Type: text/plain\r\n"
+                  b"Content-Length: 5000\r\n\r\n")  # and then no body
+        t = time.perf_counter()
+        reply = c.recv(100)
+    assert reply.startswith(b"HTTP/1.0 415")
+    assert time.perf_counter() - t < 3
+
+
 def test_negative_content_length_is_400_not_a_hang(srv):
     with socket.create_connection(srv, timeout=3) as c:
         c.sendall(b"POST /api/jobs HTTP/1.1\r\nHost: 127.0.0.1\r\nContent-Type: application/json\r\n"
