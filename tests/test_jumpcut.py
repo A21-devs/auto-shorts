@@ -9,6 +9,7 @@ from clipwright.jumpcut import (
     kept_duration,
     retime,
     retime_words,
+    source_time,
 )
 from clipwright.transcribe import Word
 
@@ -92,6 +93,24 @@ def test_retime_maps_across_cuts():
     assert retime(6.0, ranges) == 5.0
     assert retime(-1.0, ranges) == 0.0
     assert retime(99.0, ranges) == 9.0
+
+
+def test_source_time_undoes_retime():
+    ranges = [(0.0, 4.0), (5.0, 10.0), (12.5, 13.0)]
+    for t in (0.0, 1.5, 3.99, 5.0, 7.25, 9.99, 12.5, 12.9):
+        assert abs(source_time(retime(t, ranges), ranges) - t) < 1e-9
+    assert source_time(4.0, ranges) == 5.0    # on the join: the first frame after the cut
+    assert source_time(9.0, ranges) == 12.5    # second join
+    assert source_time(9.25, ranges) == 12.75
+    assert source_time(-1.0, ranges) == 0.0
+    assert source_time(99.0, ranges) == 13.0  # past the end clamps to the last kept frame
+
+
+def test_source_time_with_a_cut_at_the_start():
+    ranges = [(1.2, 3.0), (3.6, 6.0)]
+    assert source_time(0.0, ranges) == 1.2
+    assert abs(source_time(2.0, ranges) - 3.8) < 1e-9
+    assert source_time(2.0, []) == 2.0  # nothing cut: the clip timeline is the output timeline
 
 
 def test_retimed_words_build_captions_on_the_short_timeline():
