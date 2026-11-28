@@ -89,6 +89,23 @@ def retime(t: float, ranges: Ranges) -> float:
     return out
 
 
+def source_time(t: float, ranges: Ranges) -> float:
+    """Output time -> clip time, the inverse of `retime`.
+
+    The output frame at t comes from the kept piece playing at that moment. A time exactly on a
+    join belongs to the piece that starts there (that's the frame shown after the cut). Times past
+    the end clamp to the end of the last piece, negative times to the start of the first.
+    """
+    if not ranges:
+        return max(0.0, t)
+    out = 0.0
+    for a, b in ranges:
+        if t < out + (b - a):
+            return a + max(0.0, t - out)
+        out += b - a
+    return ranges[-1][1]
+
+
 def retime_words(words: Sequence[Word], clip_start: float, ranges: Ranges) -> list[Word]:
     """Words (absolute times) -> words on the jump-cut output timeline (0 = first kept frame).
 
