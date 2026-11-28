@@ -282,7 +282,7 @@ def run(job: Job, log: Log = print, progress: Progress = _no_progress) -> Path:
 
     manifest = out_dir / "manifest.json"
     _write_manifest(manifest, {"source": str(info.path), "duration": info.duration, "platform": job.platform,
-                               "url": job.url, "pick": job.pick,
+                               "url": job.url, "pick": job.pick, "copy": job.copy, "copy_model": job.copy_model,
                                "render": asdict(job.render),
                                "words": words_file, "clips": results})
     progress("done", 1.0)
@@ -381,3 +381,39 @@ def mark_clip(manifest: Path, n: int, keep: bool | None) -> dict[str, Any]:
     clips[n - 1]["keep"] = keep
     _write_manifest(manifest, data)
     return dict(clips[n - 1])
+
+
+def write_clip_copy(manifest: Path, n: int, backend: str | None = None, model: str | None = None,
+                    log: Log = print) -> dict[str, Any]:
+    """Writes (or rewrites) the title, description and hashtags of clip n from its current range,
+    saves them in manifest.json and <clip>.txt, and returns the clip's entry.
+
+    `backend` and `model` default to what the run used (--copy / --copy-model). Raises ValueError for
+    a request that can't work (no backend, no transcript) and copywriting.CopyError when the backend
+    fails. A failure leaves the old text as it was."""
+    data = json.loads(manifest.read_text(encoding="utf-8"))
+    clips = data["clips"]
+    if not 1 <= n <= len(clips):
+        raise ValueError(f"clip {n} doesn't exist, this run has {len(clips)}")
+    backend = backend or data.get("copy")
+    if not backend:
+        raise ValueError("this run didn't write titles, choose a backend to write them with")
+    if backend not in copywriting.BACKENDS:
+        raise ValueError(f"backend must be one of {', '.join(copywriting.BACKENDS)}")
+    if not data.get("words"):
+        raise ValueError("titles are written from the transcript, and this run has none (captions were off)")
+    out_dir = manifest.parent
+    try:
+        words = transcribe.load_words(out_dir / data["words"])
+    except (OSError, ValueError, TypeError) as e:
+        raise ValueError(f"can't read the transcript ({e})") from None
+    entry = clips[n - 1]
+    start, end = float(entry["start"]), float(entry["end"])
+    inside = [w for w in words if w.end > start and w.start < end]
+    log(f"writing a title for {entry['file']} with {backend}")
+    post = copywriting.write_copy(inside, backend, data.get("platform"), model or data.get("copy_model")).to_json()
+    entry["copy"] = post
+    entry["post"] = _write_post(out_dir / f"{Path(entry['file']).stem}.txt", post)
+    log(f"         title: {post['title']}")
+    _write_manifest(manifest, data)
+    return dict(entry)

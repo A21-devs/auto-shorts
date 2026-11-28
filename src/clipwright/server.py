@@ -37,7 +37,7 @@ from urllib.parse import unquote
 
 from . import copywriting, download
 from .captions import STYLES
-from .pipeline import Job, check_layout, mark_clip, rerender_clip, run
+from .pipeline import Job, check_layout, mark_clip, rerender_clip, run, write_clip_copy
 from .platforms import aspect_for, lengths
 from .render import ASPECTS, RenderOptions
 from .segment import Options
@@ -479,8 +479,20 @@ class Handler(BaseHTTPRequestHandler):
                 raise _HttpError(HTTPStatus.BAD_REQUEST, "start and end must be numbers of seconds")
             action = partial(rerender_clip, out_dir / "manifest.json", int(number), start, end, log=st.add_log)
             wait = 0.0
+        elif "copy" in body:
+            backend, model = body["copy"], body.get("copy_model")
+            if backend is not None and backend not in copywriting.BACKENDS:
+                raise _HttpError(HTTPStatus.BAD_REQUEST, f"copy must be one of {', '.join(copywriting.BACKENDS)}")
+            if model == "":
+                model = None
+            if model is not None and (not isinstance(model, str) or not COPY_MODEL_NAME.fullmatch(model)):
+                raise _HttpError(HTTPStatus.BAD_REQUEST, "copy_model must be a model name like llama3.2 or qwen2.5:7b")
+            # null means "whatever the run used"
+            action = partial(write_clip_copy, out_dir / "manifest.json", int(number), backend, model, log=st.add_log)
+            wait = 0.0
         else:
-            raise _HttpError(HTTPStatus.BAD_REQUEST, 'send {"keep": ...} or {"start": ..., "end": ...}')
+            raise _HttpError(HTTPStatus.BAD_REQUEST,
+                             'send {"keep": ...}, {"start": ..., "end": ...} or {"copy": ...}')
         try:
             self.app.begin_edit(st, wait)
         except FolderBusy as e:
@@ -490,6 +502,9 @@ class Handler(BaseHTTPRequestHandler):
             st.manifest = json.loads((out_dir / "manifest.json").read_text(encoding="utf-8"))
         except ValueError as e:
             raise _HttpError(HTTPStatus.BAD_REQUEST, str(e)) from None
+        except copywriting.CopyError as e:  # the AI backend failed or isn't there, not our fault or the page's
+            st.add_log(f"no title: {e}")
+            raise _HttpError(HTTPStatus.BAD_GATEWAY, str(e)) from None
         except Exception as e:  # ffmpeg failures and the like, the old clip is still there
             st.add_log(f"edit failed: {e}")
             raise _HttpError(HTTPStatus.INTERNAL_SERVER_ERROR, str(e)) from None
