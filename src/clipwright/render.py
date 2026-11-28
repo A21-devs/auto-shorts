@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import functools
 import json
+import math
 import re
 import shutil
 import subprocess
@@ -244,9 +245,38 @@ def speaker_crop_x(info: MediaInfo, start: float, end: float, keep: jumpcut.Rang
     return follow.crop_x_expr(keys)
 
 
+def cover_command(info: MediaInfo, at: float, out: Path, opts: RenderOptions, crop_x: str | None = None,
+                  clip_time: float = 0.0, width: int = 720) -> list[str]:
+    """ffmpeg command that writes one frame of the source at `at` seconds as a JPEG, laid out like
+    the clip (same layout, aspect and crop) but without the captions.
+
+    `crop_x` is the follow/speaker expression the clip was rendered with. It's a function of the
+    clip's own timeline, so the frame is stamped with `clip_time` (where this frame sits in the
+    rendered clip) before the crop sees it, and the window lands where it was in the clip."""
+    # no subtitles, and max_fps >= fps so there's no fps filter (it can drop the only frame)
+    graph = video_filter(opts.layout, None, info.fps, max(1, math.ceil(info.fps)), crop_x,
+                         frame_size(opts.aspect))
+    graph = graph.replace("[0:v]", f"[0:{info.video_stream}]setpts=PTS-STARTPTS+{clip_time:.3f}/TB,", 1)
+    graph += f";[vout]scale={width}:-2[cover]"
+    return [require("ffmpeg"), "-v", "error", "-y", "-ss", f"{max(0.0, at):.3f}", "-i", str(info.path),
+            "-filter_complex", graph, "-map", "[cover]", "-frames:v", "1", "-q:v", "3", str(out)]
+
+
+def render_cover(info: MediaInfo, at: float, out: Path, opts: RenderOptions, crop_x: str | None = None,
+                 clip_time: float = 0.0, width: int = 720) -> None:
+    """Writes the caption-free cover frame (see cover_command). RuntimeError if ffmpeg fails."""
+    proc = subprocess.run(cover_command(info, at, out, opts, crop_x, clip_time, width),
+                          capture_output=True, text=True, errors="replace")
+    if proc.returncode != 0 or not out.is_file():
+        tail = "\n".join(proc.stderr.strip().splitlines()[-5:])
+        raise RuntimeError(f"couldn't render a cover frame from {info.path.name}:\n{tail}")
+
+
 def render(info: MediaInfo, start: float, end: float, out: Path, opts: RenderOptions,
            subtitle_file: str | None = None, workdir: Path | None = None,
-           keep: jumpcut.Ranges | None = None) -> None:
+           keep: jumpcut.Ranges | None = None) -> str | None:
+    """Renders [start, end] of the source to `out`. Returns the crop x expression the follow and
+    speaker layouts used (None for the others), so a cover can be cut with the same window."""
     # libass paths on Windows need escaping (C\:/...), running in the subtitle's folder
     # with a bare file name avoids that. The name itself also goes into the filter graph,
     # where , ; ' [ ] and : mean something, so anything unusual gets a safe temp name.
@@ -272,3 +302,4 @@ def render(info: MediaInfo, start: float, end: float, out: Path, opts: RenderOpt
     if proc.returncode != 0:
         tail = "\n".join(proc.stderr.strip().splitlines()[-15:])
         raise RuntimeError(f"ffmpeg failed for {out.name}:\n{tail}")
+    return crop_x
