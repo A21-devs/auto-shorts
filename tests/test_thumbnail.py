@@ -45,3 +45,20 @@ def test_make_thumbnail_on_a_real_clip(tmp_path: Path):
     assert 0.5 <= t <= 19.5
     shot = probe(out)
     assert shot.width == 720 and out.stat().st_size > 1000
+
+
+def test_cover_time_is_mapped_through_the_jump_cuts(monkeypatch: pytest.MonkeyPatch, tmp_path: Path):
+    from clipwright import thumbnail
+    from clipwright.probe import MediaInfo
+    from clipwright.render import RenderOptions
+
+    calls: list[tuple[float, str | None, float]] = []
+    monkeypatch.setattr(thumbnail, "clip_time", lambda _clip: 5.0)
+    monkeypatch.setattr(thumbnail, "render_cover",
+                        lambda _info, at, _out, _opts, crop_x, clip_time: calls.append((at, crop_x, clip_time)))
+    info = MediaInfo(tmp_path / "src.mp4", 600, 1920, 1080, 30, True, video_stream=0)
+    keep = [(0.0, 4.0), (6.0, 20.0)]  # 2s pause cut at 4s, so 5.0 in the clip is 7.0 in the range
+    t = thumbnail.make_cover(tmp_path / "c.mp4", info, 100.0, tmp_path / "c.jpg", RenderOptions(), keep, "x")
+    thumbnail.make_cover(tmp_path / "c.mp4", info, 100.0, tmp_path / "c.jpg", RenderOptions())
+    assert t == 5.0
+    assert calls == [(107.0, "x", 5.0), (105.0, None, 5.0)]  # clip clock stays 5.0 for the crop
