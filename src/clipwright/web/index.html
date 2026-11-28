@@ -25,6 +25,7 @@
   label { display: flex; flex-direction: column; gap: 4px; font-size: 13px; color: var(--muted); }
   label.wide { grid-column: 1 / -1; }
   label.check { flex-direction: row; align-items: center; gap: 8px; color: var(--text); }
+  label[hidden] { display: none; }  /* display: flex above would beat the hidden attribute */
   input, select, button { font: inherit; color: inherit; }
   input[type=text], input[type=number], select {
     background: var(--bg); border: 1px solid var(--line); border-radius: 6px; padding: 7px 9px; width: 100%; }
@@ -116,6 +117,14 @@
       <select name="caption_style">
         <option value="bold">bold</option><option value="clean">clean</option><option value="boxed">boxed</option><option value="pop">pop</option><option value="minimal">minimal</option>
       </select>
+    </label>
+    <label>Write titles with
+      <select name="copy">
+        <option value="">off</option><option value="claude">Claude Code</option><option value="ollama">Ollama</option><option value="openai">OpenAI-compatible</option>
+      </select>
+    </label>
+    <label id="copy-model" hidden>Title model
+      <input type="text" name="copy_model" placeholder="llama3.2" autocomplete="off">
     </label>
     <label class="check"><input type="checkbox" name="captions" checked> Captions</label>
     <label class="check"><input type="checkbox" name="hook"> Hook title</label>
@@ -409,6 +418,13 @@ document.querySelector('select[name="platform"]').addEventListener("change", (ev
   form.elements.max.value = opt.dataset.max || 55;
 });
 
+// the model box only means something for the local / OpenAI-compatible backends, Claude Code picks its own
+document.querySelector('select[name="copy"]').addEventListener("change", (ev) => {
+  const backend = ev.target.value;
+  $("copy-model").hidden = backend !== "ollama" && backend !== "openai";
+  $("new-job").elements.copy_model.placeholder = backend === "openai" ? "server default" : "llama3.2";
+});
+
 $("new-job").addEventListener("submit", async (ev) => {
   ev.preventDefault();
   const f = new FormData(ev.target);
@@ -425,6 +441,8 @@ $("new-job").addEventListener("submit", async (ev) => {
     jumpcut: f.get("jumpcut") === "on",
     caption_style: f.get("caption_style"),
     hook: f.get("hook") === "on",
+    copy: f.get("copy") || null,
+    copy_model: $("copy-model").hidden ? null : (f.get("copy_model").trim() || null),
   };
   const button = ev.target.querySelector("button");
   button.disabled = true;

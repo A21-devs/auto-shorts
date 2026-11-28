@@ -49,6 +49,8 @@ LOG_LINES = 200
 CHUNK = 256 * 1024
 KEEP_WAIT = 2.0  # seconds a keep/drop waits for another edit of the same job to finish
 MODEL_NAME = re.compile(r"[A-Za-z0-9._-]{1,40}")
+# ollama tags (qwen2.5:7b) and OpenAI-style ids (org/model) are wider than whisper names
+COPY_MODEL_NAME = re.compile(r"[A-Za-z0-9._:/-]{1,100}")
 
 
 class BadRequest(ValueError):
@@ -162,6 +164,18 @@ def parse_job(body: dict[str, Any]) -> Job:
         raise BadRequest(f"pick must be one of {', '.join(copywriting.BACKENDS)}")
     if pick and not captions:
         raise BadRequest("pick reads the transcript, so it needs captions on")
+    copy = body.get("copy")
+    if copy == "":
+        copy = None  # a select's "off" value sent as is, same as null
+    if copy is not None and copy not in copywriting.BACKENDS:
+        raise BadRequest(f"copy must be one of {', '.join(copywriting.BACKENDS)}")
+    if copy and not captions:
+        raise BadRequest("copy writes from the transcript, so it needs captions on")
+    copy_model = body.get("copy_model")
+    if copy_model == "":
+        copy_model = None  # an empty model box means the backend's default
+    if copy_model is not None and (not isinstance(copy_model, str) or not COPY_MODEL_NAME.fullmatch(copy_model)):
+        raise BadRequest("copy_model must be a model name like llama3.2 or qwen2.5:7b")
     model = body.get("model", "small")
     if not isinstance(model, str) or not MODEL_NAME.fullmatch(model):
         raise BadRequest("model must be a whisper model name like small or large-v3")
@@ -182,6 +196,8 @@ def parse_job(body: dict[str, Any]) -> Job:
         platform=platform,
         url=url,
         pick=pick,
+        copy=copy,
+        copy_model=copy_model,
     )
 
 

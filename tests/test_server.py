@@ -104,6 +104,27 @@ def test_form_presets_match_python():
     assert found == {k: (p.min_len, p.max_len) for k, p in PLATFORMS.items()}
 
 
+def test_parse_job_copy(video: Path):
+    assert parse_job({"video": str(video)}).copy is None
+    job = parse_job({"video": str(video), "copy": "ollama", "copy_model": "qwen2.5:7b"})
+    assert (job.copy, job.copy_model) == ("ollama", "qwen2.5:7b")
+    # the form sends null for "off" and an empty model box means the default
+    for off in (None, ""):
+        job = parse_job({"video": str(video), "copy": off, "copy_model": ""})
+        assert (job.copy, job.copy_model) == (None, None)
+    assert parse_job({"video": str(video), "copy": "openai", "copy_model": "org/model-7b"}).copy_model == "org/model-7b"
+
+
+def test_form_offers_every_copy_backend():
+    import re
+
+    from clipwright.copywriting import BACKENDS
+    html = (Path(__file__).parents[1] / "src" / "clipwright" / "web" / "index.html").read_text(encoding="utf-8")
+    select = html[html.index('<select name="copy">'):]
+    select = select[:select.index("</select>")]
+    assert set(re.findall(r'<option value="(\w+)">', select)) == set(BACKENDS)
+
+
 def test_parse_job_platform(video: Path):
     job = parse_job({"video": str(video), "platform": "shorts"})
     assert (job.clips.min_len, job.clips.max_len, job.platform) == (15, 58, "shorts")
@@ -127,6 +148,11 @@ def test_parse_job_platform(video: Path):
     ({"platform": "myspace"}, "unknown platform"),
     ({"platform": 3}, "platform must be"),
     ({"platform": "shorts", "max": 90}, "at most 60s"),
+    ({"copy": "gpt"}, "copy must be one of"),
+    ({"copy": False}, "copy must be one of"),
+    ({"copy": "claude", "captions": False}, "needs captions"),
+    ({"copy": "ollama", "copy_model": "llama3.2; rm -rf"}, "copy_model"),
+    ({"copy": "ollama", "copy_model": 7}, "copy_model"),
 ])
 def test_parse_job_rejects(video: Path, patch: dict[str, Any], msg: str):
     with pytest.raises(BadRequest, match=msg):
