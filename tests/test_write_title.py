@@ -56,6 +56,13 @@ def test_backend_and_model_from_the_request_win(tmp_path: Path, asked):
     assert asked[0][1:] == ("openai", "tiktok", "org/model")
 
 
+def test_the_runs_model_stays_with_the_runs_backend(tmp_path: Path, asked):
+    manifest = finished_run(tmp_path, copy="ollama")  # run used qwen2.5:7b
+    write_clip_copy(manifest, 1, "openai", None, log=lambda _m: None)  # a different backend, no model given
+    write_clip_copy(manifest, 1, "ollama", None, log=lambda _m: None)  # the run's backend asked for by name
+    assert [a[1:] for a in asked] == [("openai", "tiktok", None), ("ollama", "tiktok", "qwen2.5:7b")]
+
+
 @pytest.mark.parametrize(("kwargs", "msg"), [
     ({"n": 3}, "doesn't exist"),
     ({"n": 1}, "choose a backend"),            # run didn't use --copy and none was given

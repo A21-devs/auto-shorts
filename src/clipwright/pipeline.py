@@ -410,8 +410,12 @@ def write_clip_copy(manifest: Path, n: int, backend: str | None = None, model: s
     entry = clips[n - 1]
     start, end = float(entry["start"]), float(entry["end"])
     inside = [w for w in words if w.end > start and w.start < end]
+    if not model and backend == data.get("copy"):
+        # the run's model only means something to the run's backend: an ollama tag sent to an
+        # OpenAI server (or the other way round) is a "model not found"
+        model = data.get("copy_model")
     log(f"writing a title for {entry['file']} with {backend}")
-    post = copywriting.write_copy(inside, backend, data.get("platform"), model or data.get("copy_model")).to_json()
+    post = copywriting.write_copy(inside, backend, data.get("platform"), model or None).to_json()
     entry["copy"] = post
     entry["post"] = _write_post(out_dir / f"{Path(entry['file']).stem}.txt", post)
     log(f"         title: {post['title']}")
