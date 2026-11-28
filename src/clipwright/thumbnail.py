@@ -1,9 +1,13 @@
-"""A cover image for each clip, taken from the rendered clip itself.
+"""A cover image for each clip.
 
-Taking it from the rendered 9:16 file (not the source) means it already has the layout, the
-crop and the jump cuts. The frame is picked near the loudest moment, since that's usually why
-the clip was chosen, but within a second or so of it the *stillest* frame wins: the frame with
-the most motion is usually motion-blurred, which makes a bad cover.
+The frame is picked on the rendered clip (its loudness and motion, jump cuts already applied),
+near the loudest moment, since that's usually why the clip was chosen. Within a second or so of
+it the *stillest* frame wins: the frame with the most motion is usually motion-blurred, which
+makes a bad cover.
+
+The picture itself is rendered from the source with the clip's layout and crop but without the
+captions (render.render_cover), otherwise covers carry half a caption line and look like a paused
+video. `make_thumbnail` grabs straight from the clip, for clips that have no source to go back to.
 """
 
 from __future__ import annotations
@@ -14,9 +18,10 @@ from pathlib import Path
 import numpy as np
 import numpy.typing as npt
 
-from . import audio
+from . import audio, jumpcut
 from .motion import read_motion
-from .probe import probe, require
+from .probe import MediaInfo, probe, require
+from .render import RenderOptions, render_cover
 
 HOP = 0.1          # loudness resolution in seconds
 FPS = 10.0         # motion samples per second
@@ -61,13 +66,31 @@ def grab(video: Path, t: float, out: Path, width: int = 720) -> None:
         raise RuntimeError(f"couldn't grab a frame from {video.name}:\n{tail}")
 
 
-def make_thumbnail(clip: Path, out: Path) -> float:
-    """Picks and writes the cover for a rendered clip. Returns the chosen time."""
+def clip_time(clip: Path) -> float:
+    """Time in the rendered clip (0 = its first frame) that makes the best cover."""
     info = probe(clip)
     loudness = None
     if info.has_audio:
         loudness = audio.loudness_curve(audio.decode_pcm(clip), hop=HOP)
     motion = read_motion(clip, info.video_stream, info.width, info.height, fps=FPS)
-    t = pick_time(loudness, motion.energy, info.duration)
+    return pick_time(loudness, motion.energy, info.duration)
+
+
+def make_thumbnail(clip: Path, out: Path) -> float:
+    """Picks and writes the cover for a rendered clip, frame grabbed from the clip itself (so
+    with its captions). Returns the chosen time."""
+    t = clip_time(clip)
     grab(clip, t, out)
+    return t
+
+
+def make_cover(clip: Path, source: MediaInfo, start: float, out: Path, opts: RenderOptions,
+               keep: jumpcut.Ranges | None = None, crop_x: str | None = None) -> float:
+    """Picks the cover time on the rendered clip and renders that frame from the source without
+    captions. `start` is where the clip starts in the source, `keep` the jump-cut ranges it was
+    rendered with and `crop_x` the follow/speaker window (render() returns it). Returns the
+    clip time used."""
+    t = clip_time(clip)
+    at = start + (jumpcut.source_time(t, keep) if keep else t)
+    render_cover(source, at, out, opts, crop_x, clip_time=t)
     return t

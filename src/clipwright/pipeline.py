@@ -148,7 +148,7 @@ def _render_one(info: MediaInfo, words: list[transcribe.Word], start: float, end
                 base: str, opts: RenderOptions, suffix: str = "", log: Log = print,
                 hook: str | None = None) -> Rendered:
     """Writes <base><suffix>.ass (if there are words or a hook title) and .srt (if any words are in
-    this clip), renders <base><suffix>.mp4 and grabs <base><suffix>.jpg from it."""
+    this clip), renders <base><suffix>.mp4 and renders its cover <base><suffix>.jpg."""
     name = f"{base}{suffix}.mp4"
     keep = plan_cuts(info, start, end) if opts.jumpcut else None
     length = jumpcut.kept_duration(keep) if keep else end - start
@@ -167,10 +167,11 @@ def _render_one(info: MediaInfo, words: list[transcribe.Word], start: float, end
         if srt_text:  # a 0-byte .srt gets rejected on upload, no file is better
             srt = f"{base}{suffix}.srt"
             (out_dir / srt).write_text(srt_text, encoding="utf-8")
-    render(info, start, end, out_dir / name, opts, sub, workdir=out_dir, keep=keep)
-    thumb: str | None = f"{base}{suffix}.jpg"
+    crop_x = render(info, start, end, out_dir / name, opts, sub, workdir=out_dir, keep=keep)
+    cover = f"{base}{suffix}.jpg"
+    thumb: str | None = cover
     try:
-        thumbnail.make_thumbnail(out_dir / name, out_dir / f"{base}{suffix}.jpg")
+        thumbnail.make_cover(out_dir / name, info, start, out_dir / cover, opts, keep, crop_x)
     except (RuntimeError, OSError, ValueError, subprocess.CalledProcessError) as e:
         # a missing cover is no reason to throw away a finished clip. CalledProcessError's text is
         # the whole ffprobe command line, which says nothing a person can use
