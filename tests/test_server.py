@@ -218,6 +218,20 @@ def test_bad_bodies(srv, body: bytes, status: int):
     assert request(srv, "POST", "/api/jobs", body)[0] == status
 
 
+@pytest.mark.parametrize(("path", "ctype", "status"), [
+    ("/api/jobs", "application/json", 413),                    # too big to parse
+    ("/api/jobs", "text/plain", 415),                          # never parsed
+    ("/api/nothing-here", "application/json", 404),            # never routed
+])
+def test_errors_arrive_even_with_an_unread_body(srv, path: str, ctype: str, status: int):
+    # the server answers these without needing the body. If it closes the socket with the body still
+    # unread, Windows resets the connection and the client sometimes gets WinError 10053 instead of
+    # the status (#49: ~1 in 60 here). Repeat it so a regression shows up as a failure, not a flake.
+    for _ in range(50):
+        got = request(srv, "POST", path, b"x" * 70_000, headers={"Content-Type": ctype})[0]
+        assert got == status
+
+
 def test_negative_content_length_is_400_not_a_hang(srv):
     with socket.create_connection(srv, timeout=3) as c:
         c.sendall(b"POST /api/jobs HTTP/1.1\r\nHost: 127.0.0.1\r\nContent-Type: application/json\r\n"

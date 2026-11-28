@@ -45,6 +45,8 @@ from .subtitles import sidecar
 
 PAGE = Path(__file__).with_name("web") / "index.html"
 MAX_BODY = 64 * 1024
+# an error sent before the body was read still reads (and drops) up to this much of it first, see _discard_body
+DRAIN_MAX = 1024 * 1024
 LOG_LINES = 200
 CHUNK = 256 * 1024
 KEEP_WAIT = 2.0  # seconds a keep/drop waits for another edit of the same job to finish
@@ -314,6 +316,7 @@ class App:
 class Handler(BaseHTTPRequestHandler):
     server_version = "clipwright"
     app: App  # set on the subclass made by make_server
+    _body_read = False  # whether this request's body has been read (or dropped), see _discard_body
 
     def log_message(self, format: str, *args: Any) -> None:  # noqa: A002 - stdlib signature
         pass  # the default prints every request, including each Range chunk of a playing video
@@ -330,7 +333,30 @@ class Handler(BaseHTTPRequestHandler):
         self.wfile.write(body)
 
     def _error(self, status: int, message: str) -> None:
+        self._discard_body()
         self._send_json(status, {"error": message})
+
+    def _discard_body(self) -> None:
+        """Reads and drops a request body nobody has read yet (a 413, 415, 403 or 404 on a POST).
+
+        The connection closes after every response. Closing a socket with unread data in it makes
+        Windows send a RST instead of a normal close, and the client then often sees "connection
+        aborted" instead of the error we just sent. Bodies over DRAIN_MAX aren't worth reading
+        just to be polite, those clients may still get the reset."""
+        if self._body_read:
+            return
+        self._body_read = True
+        try:
+            left = int(self.headers.get("Content-Length") or 0)
+        except ValueError:
+            return
+        if not 0 < left <= DRAIN_MAX:
+            return
+        while left > 0:
+            chunk = self.rfile.read(min(left, CHUNK))
+            if not chunk:
+                break
+            left -= len(chunk)
 
     def _host_ok(self) -> bool:
         host = (self.headers.get("Host") or "").rsplit(":", 1)[0].strip("[]").lower()
@@ -349,6 +375,7 @@ class Handler(BaseHTTPRequestHandler):
             raise _HttpError(HTTPStatus.BAD_REQUEST, "bad Content-Length")
         if length > MAX_BODY:
             raise _HttpError(HTTPStatus.REQUEST_ENTITY_TOO_LARGE, "request body too large")
+        self._body_read = True
         try:
             body = json.loads(self.rfile.read(length) or b"{}")
         except (json.JSONDecodeError, UnicodeDecodeError):
@@ -366,6 +393,7 @@ class Handler(BaseHTTPRequestHandler):
     # --- routing ---
 
     def _dispatch(self, method: str) -> None:
+        self._body_read = False
         if not self._host_ok():
             self._error(HTTPStatus.FORBIDDEN, "only localhost may talk to this server")
             return
