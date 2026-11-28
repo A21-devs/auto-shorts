@@ -165,6 +165,8 @@ def parse_job(body: dict[str, Any]) -> Job:
     if pick and not captions:
         raise BadRequest("pick reads the transcript, so it needs captions on")
     copy = body.get("copy")
+    if copy == "":
+        copy = None  # a select's "off" value sent as is, same as null
     if copy is not None and copy not in copywriting.BACKENDS:
         raise BadRequest(f"copy must be one of {', '.join(copywriting.BACKENDS)}")
     if copy and not captions:

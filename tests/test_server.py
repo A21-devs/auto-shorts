@@ -109,8 +109,9 @@ def test_parse_job_copy(video: Path):
     job = parse_job({"video": str(video), "copy": "ollama", "copy_model": "qwen2.5:7b"})
     assert (job.copy, job.copy_model) == ("ollama", "qwen2.5:7b")
     # the form sends null for "off" and an empty model box means the default
-    job = parse_job({"video": str(video), "copy": None, "copy_model": ""})
-    assert (job.copy, job.copy_model) == (None, None)
+    for off in (None, ""):
+        job = parse_job({"video": str(video), "copy": off, "copy_model": ""})
+        assert (job.copy, job.copy_model) == (None, None)
     assert parse_job({"video": str(video), "copy": "openai", "copy_model": "org/model-7b"}).copy_model == "org/model-7b"
 
 
@@ -148,6 +149,7 @@ def test_parse_job_platform(video: Path):
     ({"platform": 3}, "platform must be"),
     ({"platform": "shorts", "max": 90}, "at most 60s"),
     ({"copy": "gpt"}, "copy must be one of"),
+    ({"copy": False}, "copy must be one of"),
     ({"copy": "claude", "captions": False}, "needs captions"),
     ({"copy": "ollama", "copy_model": "llama3.2; rm -rf"}, "copy_model"),
     ({"copy": "ollama", "copy_model": 7}, "copy_model"),
