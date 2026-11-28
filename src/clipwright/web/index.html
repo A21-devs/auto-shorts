@@ -371,11 +371,42 @@ function clipCard(job, manifest, clip, n) {
   }
   // title, description and hashtags from --copy, selectable so they can be pasted into the upload form
   const post = el("div", "post");
-  if (clip.copy) {
-    post.append(el("strong", null, clip.copy.title), el("span", null, clip.copy.description),
-                el("span", "tags", clip.copy.hashtags.map((t) => `#${t}`).join(" ")));
-  }
-  meta.append(times, score, why, post, files, startRow, endRow, editRow, keepRow, err);
+  const showPost = (copy) => {
+    post.replaceChildren();
+    if (copy) {
+      post.append(el("strong", null, copy.title), el("span", null, copy.description),
+                  el("span", "tags", copy.hashtags.map((t) => `#${t}`).join(" ")));
+    }
+  };
+  showPost(clip.copy);
+  // writes the text for this clip's current range: after a trim, or for a run that didn't ask for it.
+  // Uses the form's "Write titles with" choice if one is set, otherwise whatever the run used
+  const titleLabel = () => (clip.copy ? "Rewrite title" : "Write title");
+  const writeTitle = button(titleLabel(), async () => {
+    const form = $("new-job").elements;
+    const body = { copy: form.copy.value || null };
+    if (body.copy && !$("copy-model").hidden) body.copy_model = form.copy_model.value.trim() || null;
+    err.textContent = "";
+    writeTitle.disabled = true;
+    writeTitle.textContent = "Writing...";
+    try {
+      const updated = await editClip(job, n, body);
+      clip.copy = updated.manifest.clips[n - 1].copy;
+      showPost(clip.copy);
+      // only the text changed, keep the cards (and their videos) as they are
+      shownManifest = JSON.stringify(updated.manifest);
+    } catch (e) {
+      err.textContent = `couldn't write a title: ${e.message}`;
+    }
+    writeTitle.textContent = titleLabel();
+    writeTitle.disabled = false;
+  });
+  const titleRow = el("div", "actions");
+  titleRow.append(writeTitle);
+  meta.append(times, score, why, post, files, startRow, endRow, editRow, keepRow);
+  // a title is written from the transcript, without one there's nothing to send
+  if (manifest.words) meta.append(titleRow);
+  meta.append(err);
   card.append(video, meta);
   return card;
 }
